@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: user-system-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: user_system
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d user_system"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - user-system-network
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: user-system-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass redis123
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - user-system-network
+
+  # 后端服务 (待实现)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: user-system-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://admin:admin123@postgres:5432/user_system?sslmode=disable
+      - REDIS_URL=redis://:redis123@redis:6379/0
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+      - SERVER_PORT=8080
+      - GIN_MODE=release
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - user-system-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 前端服务 (待实现)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: user-system-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      - backend
+    networks:
+      - user-system-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  user-system-network:
+    driver: bridge
