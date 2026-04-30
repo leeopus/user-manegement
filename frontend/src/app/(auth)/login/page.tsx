@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { api } from "@/lib/api"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -20,28 +21,22 @@ export default function LoginPage() {
     setError("")
 
     try {
-      const response = await fetch("http://localhost:8080/api/v1/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, password }),
-      })
+      const response = await api.login({ email, password })
 
-      const data = await response.json()
-
-      if (data.code === 0) {
+      if (response.code === 0 && response.data) {
         // Store tokens
-        localStorage.setItem("access_token", data.access_token)
-        localStorage.setItem("refresh_token", data.refresh_token)
-        localStorage.setItem("user", JSON.stringify(data.user))
+        localStorage.setItem("access_token", response.data.access_token)
+        localStorage.setItem("refresh_token", response.data.refresh_token)
+        localStorage.setItem("user", JSON.stringify(response.data.user))
 
-        // Redirect to dashboard
-        router.push("/dashboard")
+        // Redirect to profile page (user center)
+        // Admin can access dashboard from there
+        router.push("/profile")
       } else {
-        setError(data.message || "Login failed")
+        setError(response.message || "Login failed")
       }
     } catch (err) {
+      console.error("Login error:", err)
       setError("Network error. Please check your connection.")
     } finally {
       setLoading(false)

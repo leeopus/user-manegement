@@ -32,9 +32,12 @@ func NewOAuthService(appRepo repository.OAuthApplicationRepository, tokenRepo re
 }
 
 func (s *oauthService) CreateApplication(name, clientSecret, redirectURIs string) (*repository.OAuthApplication, error) {
+	// Generate a simple client ID
+	clientID := "client_" + time.Now().Format("20060102150405")
+
 	app := &repository.OAuthApplication{
 		Name:         name,
-		ClientID:     utils.GenerateToken(1, "app", "client")[0:32],
+		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURIs: redirectURIs,
 	}
@@ -63,8 +66,15 @@ func (s *oauthService) Token(clientID, clientSecret, code string) (string, strin
 	}
 
 	// Generate access token
-	accessToken := utils.GenerateToken(1, "access", "token")
-	refreshToken := utils.GenerateRefreshToken(1, "refresh", "token")
+	accessToken, err := utils.GenerateToken(1, "access", "token")
+	if err != nil {
+		return "", "", err
+	}
+
+	refreshToken, err := utils.GenerateRefreshToken(1, "refresh", "token")
+	if err != nil {
+		return "", "", err
+	}
 
 	// For simplicity, using user ID 1
 	oauthToken := &repository.OAuthToken{
@@ -72,7 +82,6 @@ func (s *oauthService) Token(clientID, clientSecret, code string) (string, strin
 		UserID:        1,
 		AccessToken:   accessToken,
 		RefreshToken:  refreshToken,
-		ExpiresAt:     time.Now().Add(3600 * time.Second),
 	}
 
 	if err := s.tokenRepo.Create(oauthToken); err != nil {

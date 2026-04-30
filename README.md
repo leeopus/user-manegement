@@ -32,62 +32,56 @@
 
 ## 快速开始
 
-### 前置要求
+### 开发模式
 
-- Docker & Docker Compose
-- Go 1.21+ (本地开发)
-- Node.js 20+ (本地开发)
-
-### 使用Docker启动
+所有服务本地运行，支持热重载：
 
 ```bash
-# 克隆项目
-git clone <repository-url>
-cd sys
+./dev.sh
+```
 
-# 启动所有服务
-docker-compose up -d
+- 前端: http://localhost:3000
+- 后端: http://localhost:8080
+- 支持 Next.js 热重载
+- 后端使用 `go run` 直接运行
 
+**停止开发模式**:
+- 按 `Ctrl+C` 停止前端
+- `pkill -f "go run cmd/server/main.go"` 停止后端
+- 或使用: `./stop.sh`
+
+### 生产模式
+
+Docker Compose 部署所有服务：
+
+```bash
+./production.sh
+```
+
+- 前端: http://106.15.3.98:3000
+- 后端: http://106.15.3.98:8080
+- 所有服务运行在 Docker 容器中
+- 自动配置健康检查和重启策略
+
+**停止生产模式**:
+```bash
+docker-compose down
+# 或
+./stop.sh
+```
+
+### 手动控制 Docker
+
+```bash
 # 查看日志
 docker-compose logs -f
 
-# 访问前端
-open http://localhost:3000
+# 重启服务
+docker-compose restart
 
-# 访问后端API
-curl http://localhost:8080/health
-```
-
-### 本地开发
-
-#### 后端开发
-
-```bash
-cd backend
-
-# 安装依赖
-go mod download
-
-# 运行开发服务器
-go run cmd/server/main.go
-
-# 运行测试
-go test ./...
-```
-
-#### 前端开发
-
-```bash
-cd frontend
-
-# 安装依赖
-pnpm install
-
-# 运行开发服务器
-pnpm dev
-
-# 构建生产版本
-pnpm build
+# 进入容器
+docker-compose exec backend sh
+docker-compose exec postgres psql -U admin -d user_system
 ```
 
 ## 项目结构

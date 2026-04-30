@@ -14,11 +14,21 @@ export default function DashboardLayout({
 
   useEffect(() => {
     const userStr = localStorage.getItem("user")
-    if (!userStr) {
+    if (!userStr || userStr === "undefined") {
       router.push("/login")
       return
     }
-    setUser(JSON.parse(userStr))
+    try {
+      const user = JSON.parse(userStr)
+      if (!user || !user.ID) {
+        router.push("/login")
+        return
+      }
+      setUser(user)
+    } catch (err) {
+      console.error("Failed to parse user data:", err)
+      router.push("/login")
+    }
   }, [router])
 
   const handleLogout = () => {
@@ -40,7 +50,7 @@ export default function DashboardLayout({
           <h1 className="text-xl font-bold">User Management System</h1>
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-600">
-              Welcome, {user.username}
+              Welcome, {user.Username || user.Email}
             </span>
             <Button variant="outline" size="sm" onClick={handleLogout}>
               Logout

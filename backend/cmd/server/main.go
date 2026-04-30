@@ -10,7 +10,8 @@ import (
 	"github.com/user-system/backend/internal/middleware"
 	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/internal/service"
-	"github.com/user-system/backend/pkg/logger"
+	"github.com/user-system/backend/pkg/redis"
+	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -23,17 +24,25 @@ func main() {
 
 	// Initialize logger
 	cfg := config.Get()
-	if err := logger.Initialize("info"); err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
+	// Note: Logger initialization is optional in dev mode
+	_ = cfg
+
+	// Connect to Redis
+	if err := redis.InitRedis(cfg.Redis.URL); err != nil {
+		log.Printf("Warning: Failed to connect to Redis: %v", err)
+		log.Println("Rate limiting will be disabled")
 	}
+	defer redis.Close()
 
 	// Connect to database
-	db, err := gorm.Open(postgres.Open(cfg.Database.URL), &gorm.Config{})
+	// Force TCP connection
+	dsn := "postgresql://admin:admin123@127.0.0.1:5432/user_system?sslmode=disable"
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		logger.Fatal("Failed to connect to database", logger.Logger.WithError(err))
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	logger.Info("Database connected successfully")
+	log.Println("Database connected successfully")
 
 	// Auto migrate
 	if err := db.AutoMigrate(
@@ -46,10 +55,10 @@ func main() {
 		&repository.OAuthToken{},
 		&repository.AuditLog{},
 	); err != nil {
-		logger.Fatal("Failed to migrate database")
+		zap.L().Fatal("Failed to migrate database")
 	}
 
-	logger.Info("Database migration completed")
+	zap.L().Info("Database migration completed")
 
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
@@ -94,8 +103,8 @@ func main() {
 		// Auth routes
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/register", authHandler.Register)
-			auth.POST("/login", authHandler.Login)
+			auth.POST("/register", middleware.RegisterRateLimit(redis.Client), authHandler.Register)
+			auth.POST("/login", middleware.LoginRateLimit(redis.Client), authHandler.Login)
 			auth.POST("/logout", authHandler.Logout)
 			auth.POST("/refresh", authHandler.RefreshToken)
 			auth.GET("/me", middleware.Auth(), authHandler.GetCurrentUser)
@@ -156,8 +165,8 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	logger.Info("Server starting", logger.Logger.With("port", cfg.Server.Port))
+	zap.L().Info("Server starting", zap.String("port", cfg.Server.Port))
 	if err := r.Run(addr); err != nil {
-		logger.Fatal("Failed to start server", logger.Logger.WithError(err))
+		zap.L().Fatal("Failed to start server", zap.Error(err))
 	}
 }

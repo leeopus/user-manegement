@@ -21,10 +21,15 @@ vendor/
 backend/bin/
 backend/dist/
 
-# Environment variables
+# Environment variables (sensitive)
 .env
 .env.local
 .env.*.local
+backend/.env
+
+# Keep example files
+!.env.example
+!.env.production.example
 
 # IDE
 .vscode/
@@ -40,12 +45,16 @@ Thumbs.db
 # Logs
 *.log
 logs/
+/tmp/
 
 # Frontend
 frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.turbo/
+
+# Next.js build output
+frontend/.next/static/
 
 # Docker
 docker/volumes/
@@ -57,3 +66,31 @@ docker/volumes/
 
 # Redis dump
 dump.rdb
+
+# Claude Code (optional, remove if you want to include)
+.claude/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.directory
+
+# Package manager locks (optional - uncomment if you want to ignore)
+# package-lock.json
+# go.sum

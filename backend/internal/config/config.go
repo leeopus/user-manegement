@@ -49,13 +49,15 @@ func Load(configPath string) error {
 	viper.SetDefault("jwt.expiration", "1h")
 	viper.SetDefault("jwt.refresh_expiration", "720h")
 	viper.SetDefault("cors.origins", []string{"http://localhost:3000"})
+	viper.SetDefault("redis.url", "redis://localhost:6379/0")
 
-	// Read from environment
-	viper.AutomaticEnv()
-
+	// Read from config file
 	if err := viper.ReadInConfig(); err != nil {
 		return err
 	}
+
+	// Read from environment (will override config file)
+	viper.AutomaticEnv()
 
 	AppConfig = &Config{}
 	if err := viper.Unmarshal(AppConfig); err != nil {

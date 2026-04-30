@@ -25,7 +25,7 @@ func NewAuthHandler(authService service.AuthService) AuthHandler {
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=50"`
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
+	Password string `json:"password" binding:"required"`
 }
 
 type LoginRequest struct {
@@ -44,7 +44,11 @@ func (h *authHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authService.Register(req.Username, req.Email, req.Password)
+	// 获取客户端信息
+	clientIP := c.ClientIP()
+	userAgent := c.GetHeader("User-Agent")
+
+	user, err := h.authService.Register(req.Username, req.Email, req.Password, clientIP, userAgent)
 	if err != nil {
 		response.Error(c, 400, err.Error())
 		return

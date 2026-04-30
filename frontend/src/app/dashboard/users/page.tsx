@@ -14,11 +14,11 @@ import {
 import { Badge } from "@/components/ui/badge"
 
 interface User {
-  id: number
-  username: string
-  email: string
-  status: string
-  created_at: string
+  ID: number
+  Username: string
+  Email: string
+  Status: string
+  CreatedAt: string
 }
 
 export default function UsersPage() {
@@ -84,21 +84,21 @@ export default function UsersPage() {
                   </TableRow>
                 ) : (
                   users.map((user) => (
-                    <TableRow key={user.id}>
-                      <TableCell>{user.id}</TableCell>
-                      <TableCell>{user.username}</TableCell>
-                      <TableCell>{user.email}</TableCell>
+                    <TableRow key={user.ID}>
+                      <TableCell>{user.ID}</TableCell>
+                      <TableCell>{user.Username}</TableCell>
+                      <TableCell>{user.Email}</TableCell>
                       <TableCell>
                         <Badge
                           variant={
-                            user.status === "active" ? "default" : "secondary"
+                            user.Status === "active" ? "default" : "secondary"
                           }
                         >
-                          {user.status}
+                          {user.Status}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {new Date(user.created_at).toLocaleDateString()}
+                        {new Date(user.CreatedAt).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm">

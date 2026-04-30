@@ -2,14 +2,14 @@ package service
 
 import (
 	"errors"
-	"time"
+	"fmt"
 
 	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/pkg/utils"
 )
 
 type AuthService interface {
-	Register(username, email, password string) (*repository.User, error)
+	Register(username, email, password, clientIP, userAgent string) (*repository.User, error)
 	Login(email, password string) (*repository.User, string, string, error)
 	RefreshToken(refreshToken string) (*repository.User, string, error)
 	Logout(userID uint) error
@@ -28,39 +28,69 @@ func NewAuthService(userRepo repository.UserRepository, auditLogRepo repository.
 	}
 }
 
-func (s *authService) Register(username, email, password string) (*repository.User, error) {
-	// Check if user exists
-	if _, err := s.userRepo.FindByEmail(email); err == nil {
-		return nil, errors.New("email already exists")
+func (s *authService) Register(username, email, password, clientIP, userAgent string) (*repository.User, error) {
+	// 1. 验证用户名格式
+	if err := utils.ValidateUsername(username); err != nil {
+		return nil, err
 	}
 
-	if _, err := s.userRepo.FindByUsername(username); err == nil {
-		return nil, errors.New("username already exists")
+	// 2. 验证邮箱格式
+	if err := utils.ValidateEmail(email); err != nil {
+		return nil, err
 	}
 
-	// Hash password
-	passwordHash, err := utils.HashPassword(password)
+	// 3. 验证密码强度
+	strength, err := utils.ValidatePassword(password, username)
 	if err != nil {
 		return nil, err
 	}
 
+	// 密码强度至少为中等
+	if strength < utils.PasswordFair {
+		return nil, errors.New("密码强度不足，请使用更复杂的密码")
+	}
+
+	// 4. 检查是否为一次性邮箱
+	if utils.IsDisposableEmail(email) {
+		return nil, errors.New("不支持一次性邮箱注册")
+	}
+
+	// 5. 检查邮箱是否已存在
+	if _, err := s.userRepo.FindByEmail(email); err == nil {
+		return nil, errors.New("该邮箱已被注册")
+	}
+
+	// 6. 检查用户名是否已存在
+	if _, err := s.userRepo.FindByUsername(username); err == nil {
+		return nil, errors.New("该用户名已被使用")
+	}
+
+	// 7. 加密密码
+	passwordHash, err := utils.HashPassword(password)
+	if err != nil {
+		return nil, errors.New("密码加密失败")
+	}
+
+	// 8. 创建用户
 	user := &repository.User{
 		Username:     username,
 		Email:        email,
 		PasswordHash: passwordHash,
-		Status:       "active",
+		Status:       "active", // 可以改为 "pending" 需要邮箱验证
 	}
 
 	if err := s.userRepo.Create(user); err != nil {
-		return nil, err
+		return nil, errors.New("创建用户失败")
 	}
 
-	// Create audit log
+	// 9. 记录审计日志（包含 IP 和 User-Agent）
 	auditLog := &repository.AuditLog{
-		UserID:   user.ID,
-		Action:   "register",
-		Resource: "user",
-		Details:  "User registered successfully",
+		UserID:    user.ID,
+		Action:    "register",
+		Resource:  "user",
+		IPAddress: clientIP,
+		UserAgent: userAgent,
+		Details:   fmt.Sprintf("User registered from IP: %s", clientIP),
 	}
 	s.auditLogRepo.Create(auditLog)
 
@@ -110,17 +140,17 @@ func (s *authService) Login(email, password string) (*repository.User, string, s
 func (s *authService) RefreshToken(refreshToken string) (*repository.User, string, error) {
 	claims, err := utils.ParseToken(refreshToken)
 	if err != nil {
-		return nil, errors.New("invalid refresh token")
+		return nil, "", errors.New("invalid refresh token")
 	}
 
 	user, err := s.userRepo.FindByID(claims.UserID)
 	if err != nil {
-		return nil, errors.New("user not found")
+		return nil, "", errors.New("user not found")
 	}
 
 	newToken, err := utils.GenerateToken(user.ID, user.Username, user.Email)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	return user, newToken, nil

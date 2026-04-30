@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/user-system/backend/pkg/logger"
+	"go.uber.org/zap"
 )
 
 func Logger() gin.HandlerFunc {
@@ -18,16 +18,14 @@ func Logger() gin.HandlerFunc {
 		end := time.Now()
 		latency := end.Sub(start)
 
-		logger.Info("HTTP Request",
-			logger.Logger.With(
-				"method", c.Request.Method,
-				"path", path,
-				"query", query,
-				"status", c.Writer.Status(),
-				"latency", latency,
-				"ip", c.ClientIP(),
-				"user_agent", c.Request.UserAgent(),
-			),
+		zap.L().Info("HTTP Request",
+			zap.String("method", c.Request.Method),
+			zap.String("path", path),
+			zap.String("query", query),
+			zap.Int("status", c.Writer.Status()),
+			zap.Duration("latency", latency),
+			zap.String("ip", c.ClientIP()),
+			zap.String("user_agent", c.Request.UserAgent()),
 		)
 	}
 }
