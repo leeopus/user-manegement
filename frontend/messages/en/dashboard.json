@@ -1,0 +1,14 @@
+{
+  "title": "Admin Dashboard",
+  "welcome": "Welcome, ",
+  "home": "Home",
+  "users": "Users",
+  "roles": "Roles",
+  "permissions": "Permissions",
+  "ssoApps": "SSO Apps",
+  "totalUsers": "Total Users",
+  "totalRoles": "Total Roles",
+  "ssoApplications": "SSO Applications",
+  "overview": "Overview",
+  "statistics": "Statistics"
+}

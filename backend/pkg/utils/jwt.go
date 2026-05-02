@@ -16,6 +16,15 @@ type Claims struct {
 }
 
 func GenerateToken(userID uint, username, email string) (string, error) {
+	return GenerateTokenWithExpiry(userID, username, email, time.Hour)
+}
+
+func GenerateRefreshToken(userID uint, username, email string) (string, error) {
+	return GenerateRefreshTokenWithExpiry(userID, username, email, 720*time.Hour) // 默认30天
+}
+
+// GenerateTokenWithExpiry 生成指定过期时间的access token
+func GenerateTokenWithExpiry(userID uint, username, email string, expiry time.Duration) (string, error) {
 	cfg := config.Get()
 
 	claims := Claims{
@@ -23,7 +32,7 @@ func GenerateToken(userID uint, username, email string) (string, error) {
 		Username: username,
 		Email:    email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(cfg.JWT.Expiration)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 		},
@@ -33,7 +42,8 @@ func GenerateToken(userID uint, username, email string) (string, error) {
 	return token.SignedString([]byte(cfg.JWT.Secret))
 }
 
-func GenerateRefreshToken(userID uint, username, email string) (string, error) {
+// GenerateRefreshTokenWithExpiry 生成指定过期时间的refresh token
+func GenerateRefreshTokenWithExpiry(userID uint, username, email string, expiry time.Duration) (string, error) {
 	cfg := config.Get()
 
 	claims := Claims{
@@ -41,7 +51,7 @@ func GenerateRefreshToken(userID uint, username, email string) (string, error) {
 		Username: username,
 		Email:    email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(cfg.JWT.RefreshExpiration)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 		},

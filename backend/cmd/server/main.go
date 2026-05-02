@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/user-system/backend/internal/config"
+	"github.com/user-system/backend/internal/email"
 	"github.com/user-system/backend/internal/handler"
 	"github.com/user-system/backend/internal/middleware"
 	"github.com/user-system/backend/internal/repository"
@@ -17,6 +19,14 @@ import (
 )
 
 func main() {
+	// 全局错误恢复机制
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌ Recovered from panic: %v", r)
+			// 这里可以添加：记录到监控系统、发送告警、清理资源等
+		}
+	}()
+
 	// Load configuration
 	if err := config.Load(".env"); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -35,12 +45,20 @@ func main() {
 	defer redis.Close()
 
 	// Connect to database
-	// Force TCP connection
-	dsn := "postgresql://admin:admin123@127.0.0.1:5432/user_system?sslmode=disable"
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.Database.URL), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
+
+	// 配置数据库连接池
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("Failed to get database connection: %v", err)
+	}
+
+	sqlDB.SetMaxIdleConns(10)           // 最大空闲连接数
+	sqlDB.SetMaxOpenConns(100)          // 最大连接数
+	sqlDB.SetConnMaxLifetime(time.Hour) // 连接最大生存时间
 
 	log.Println("Database connected successfully")
 
@@ -54,6 +72,7 @@ func main() {
 		&repository.OAuthApplication{},
 		&repository.OAuthToken{},
 		&repository.AuditLog{},
+		&repository.PasswordResetToken{},
 	); err != nil {
 		zap.L().Fatal("Failed to migrate database")
 	}
@@ -67,13 +86,26 @@ func main() {
 	oauthAppRepo := repository.NewOAuthApplicationRepository(db)
 	oauthTokenRepo := repository.NewOAuthTokenRepository(db)
 	auditLogRepo := repository.NewAuditLogRepository(db)
+	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	// Initialize services
+	// 根据环境变量选择邮件服务
+	smtpConfig := email.GetSMTPConfig()
+	var emailService email.EmailService
+	if smtpConfig.Host != "" && smtpConfig.Username != "" {
+		fmt.Println("📧 使用SMTP邮件服务")
+		emailService = email.NewSMTPEmailService(smtpConfig)
+	} else {
+		fmt.Println("📧 使用开发环境邮件服务 (控制台输出)")
+		emailService = email.NewDevelopmentEmailService()
+	}
+
 	authService := service.NewAuthService(userRepo, auditLogRepo)
 	userService := service.NewUserService(userRepo, roleRepo, auditLogRepo)
 	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogRepo)
 	permissionService := service.NewPermissionService(permissionRepo, auditLogRepo)
 	oauthService := service.NewOAuthService(oauthAppRepo, oauthTokenRepo, userRepo, auditLogRepo)
+	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, auditLogRepo, emailService, cfg.Frontend.URL)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
@@ -81,6 +113,8 @@ func main() {
 	roleHandler := handler.NewRoleHandler(roleService)
 	permissionHandler := handler.NewPermissionHandler(permissionService)
 	oauthHandler := handler.NewOAuthHandler(oauthService)
+	csrfHandler := handler.NewCSRFHandler()
+	passwordHandler := handler.NewPasswordHandler(passwordService)
 
 	// Setup Gin
 	if cfg.Server.GinMode == "release" {
@@ -88,7 +122,7 @@ func main() {
 	}
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery(zap.L())) // 使用我们的自定义恢复中间件
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 
@@ -97,11 +131,15 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	// CSRF token endpoint (no auth required)
+	r.GET("/api/csrf-token", csrfHandler.GetToken)
+
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
-		// Auth routes
+		// Auth routes with CSRF protection
 		auth := v1.Group("/auth")
+		auth.Use(middleware.CSRF())
 		{
 			auth.POST("/register", middleware.RegisterRateLimit(redis.Client), authHandler.Register)
 			auth.POST("/login", middleware.LoginRateLimit(redis.Client), authHandler.Login)
@@ -109,6 +147,11 @@ func main() {
 			auth.POST("/refresh", authHandler.RefreshToken)
 			auth.GET("/me", middleware.Auth(), authHandler.GetCurrentUser)
 		}
+
+		// Password reset routes (no CSRF protection - users don't have valid sessions)
+		v1.POST("/auth/password/reset-request", passwordHandler.RequestReset)
+		v1.POST("/auth/password/reset", passwordHandler.ResetPassword)
+		v1.POST("/auth/password/validate-token", passwordHandler.ValidateToken)
 
 		// User routes (protected)
 		users := v1.Group("/users")

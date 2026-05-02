@@ -21,7 +21,7 @@ fi
 
 # 启动后端（后台）
 echo "📦 启动后端服务..."
-cd /root/sys/backend
+cd /root/user-management/backend
 go run cmd/server/main.go > /tmp/backend-dev.log 2>&1 &
 BACKEND_PID=$!
 echo "   后端 PID: $BACKEND_PID"
@@ -31,7 +31,7 @@ sleep 3
 
 # 启动前端（前台，支持热重载）
 echo "🎨 启动前端服务..."
-cd /root/sys/frontend
+cd /root/user-management/frontend
 echo ""
 echo "✅ 开发环境启动完成！"
 echo ""

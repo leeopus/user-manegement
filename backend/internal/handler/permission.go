@@ -38,7 +38,7 @@ func (h *permissionHandler) ListPermissions(c *gin.Context) {
 
 	permissions, total, err := h.permissionService.ListPermissions(page, pageSize)
 	if err != nil {
-		response.Error(c, 500, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -59,7 +59,7 @@ func (h *permissionHandler) GetPermission(c *gin.Context) {
 
 	permission, err := h.permissionService.GetPermission(uint(id))
 	if err != nil {
-		response.Error(c, 404, "permission not found")
+		response.Error(c, err)
 		return
 	}
 
@@ -75,7 +75,7 @@ func (h *permissionHandler) CreatePermission(c *gin.Context) {
 
 	permission, err := h.permissionService.CreatePermission(req.Name, req.Code, req.Resource, req.Action, req.Description)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *permissionHandler) UpdatePermission(c *gin.Context) {
 
 	permission, err := h.permissionService.UpdatePermission(uint(id), req.Name, req.Code, req.Resource, req.Action, req.Description)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -112,7 +112,7 @@ func (h *permissionHandler) DeletePermission(c *gin.Context) {
 	}
 
 	if err := h.permissionService.DeletePermission(uint(id)); err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 

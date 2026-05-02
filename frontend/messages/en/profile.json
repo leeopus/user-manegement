@@ -1,0 +1,18 @@
+{
+  "title": "User Center",
+  "personalInfo": "Personal Information",
+  "description": "Your account information and accessible applications",
+  "username": "Username",
+  "email": "Email",
+  "status": "Status",
+  "active": "Active",
+  "inactive": "Inactive",
+  "registrationTime": "Registration Time",
+  "accessibleApps": "Accessible Applications",
+  "noApps": "No accessible applications",
+  "noAppsHint": "Please contact the administrator to add application access permissions",
+  "quickLinks": "Quick Links",
+  "adminPanel": "Admin Panel",
+  "adminOnly": "Admin access only",
+  "logout": "Logout"
+}

@@ -36,7 +36,7 @@ func (h *roleHandler) ListRoles(c *gin.Context) {
 
 	roles, total, err := h.roleService.ListRoles(page, pageSize)
 	if err != nil {
-		response.Error(c, 500, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -57,7 +57,7 @@ func (h *roleHandler) GetRole(c *gin.Context) {
 
 	role, err := h.roleService.GetRole(uint(id))
 	if err != nil {
-		response.Error(c, 404, "role not found")
+		response.Error(c, err)
 		return
 	}
 
@@ -73,7 +73,7 @@ func (h *roleHandler) CreateRole(c *gin.Context) {
 
 	role, err := h.roleService.CreateRole(req.Name, req.Code, req.Description)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *roleHandler) UpdateRole(c *gin.Context) {
 
 	role, err := h.roleService.UpdateRole(uint(id), req.Name, req.Code, req.Description)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -110,7 +110,7 @@ func (h *roleHandler) DeleteRole(c *gin.Context) {
 	}
 
 	if err := h.roleService.DeleteRole(uint(id)); err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 

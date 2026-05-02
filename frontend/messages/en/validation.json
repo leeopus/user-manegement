@@ -1,0 +1,34 @@
+{
+  "username": {
+    "required": "Username is required",
+    "minLength": "Username must be at least 3 characters",
+    "maxLength": "Username must be at most 32 characters",
+    "pattern": "Username can only contain letters, numbers, underscores, and hyphens",
+    "consecutive": "Username cannot use special characters consecutively",
+    "reserved": "This username is reserved"
+  },
+  "email": {
+    "required": "Email is required",
+    "invalid": "Invalid email format",
+    "tooLong": "Email address is too long"
+  },
+  "password": {
+    "required": "Password is required",
+    "minLength": "Password must be at least 8 characters",
+    "maxLength": "Password must be at most 64 characters",
+    "lowercase": "Password must contain lowercase letters",
+    "number": "Password must contain numbers",
+    "containsUsername": "Password cannot contain username",
+    "tooWeak": "Password is too weak",
+    "sameChars": "Password cannot be all the same characters",
+    "mismatch": "Passwords do not match"
+  },
+  "passwordStrength": "Password strength",
+  "passwordRequirements": "Password requirements:",
+  "requirements": {
+    "length": "At least 8 characters",
+    "complexity": "Contains lowercase letters and numbers",
+    "unique": "Cannot contain username",
+    "suggestion": "Special characters recommended for stronger security"
+  }
+}

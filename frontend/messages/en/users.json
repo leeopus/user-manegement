@@ -1,0 +1,13 @@
+{
+  "title": "User Management",
+  "addUser": "Add User",
+  "usersList": "Users List",
+  "loading": "Loading...",
+  "noUsers": "No users found",
+  "actions": "Actions",
+  "edit": "Edit",
+  "delete": "Delete",
+  "confirmDelete": "Are you sure you want to delete this user?",
+  "userDetails": "User Details",
+  "assignRole": "Assign Role"
+}

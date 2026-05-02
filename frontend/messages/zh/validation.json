@@ -1,0 +1,34 @@
+{
+  "username": {
+    "required": "请输入用户名",
+    "minLength": "用户名至少 3 位",
+    "maxLength": "用户名最多 32 位",
+    "pattern": "用户名只能包含字母、数字、下划线和连字符",
+    "consecutive": "用户名不能连续使用特殊字符",
+    "reserved": "该用户名不可使用"
+  },
+  "email": {
+    "required": "请输入邮箱地址",
+    "invalid": "邮箱格式不正确",
+    "tooLong": "邮箱地址过长"
+  },
+  "password": {
+    "required": "请输入密码",
+    "minLength": "密码至少 8 位",
+    "maxLength": "密码最多 64 位",
+    "lowercase": "密码必须包含小写字母",
+    "number": "密码必须包含数字",
+    "containsUsername": "密码不能包含用户名",
+    "tooWeak": "密码过于简单",
+    "sameChars": "密码不能全是相同字符",
+    "mismatch": "两次输入的密码不一致"
+  },
+  "passwordStrength": "密码强度",
+  "passwordRequirements": "密码要求：",
+  "requirements": {
+    "length": "至少 8 位字符",
+    "complexity": "包含小写字母和数字",
+    "unique": "不能包含用户名",
+    "suggestion": "建议使用特殊字符增强强度"
+  }
+}

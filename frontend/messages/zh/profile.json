@@ -1,0 +1,18 @@
+{
+  "title": "用户中心",
+  "personalInfo": "个人信息",
+  "description": "您的账户信息和可访问的应用",
+  "username": "用户名",
+  "email": "邮箱",
+  "status": "状态",
+  "active": "正常",
+  "inactive": "未激活",
+  "registrationTime": "注册时间",
+  "accessibleApps": "可访问的应用",
+  "noApps": "暂无可访问的应用",
+  "noAppsHint": "请联系管理员添加应用访问权限",
+  "quickLinks": "快速链接",
+  "adminPanel": "管理后台",
+  "adminOnly": "仅管理员可访问",
+  "logout": "退出登录"
+}

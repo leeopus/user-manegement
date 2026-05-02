@@ -53,7 +53,7 @@ func (h *oauthHandler) Authorize(c *gin.Context) {
 
 	app, err := h.oauthService.Authorize(req.ClientID, req.RedirectURI)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -69,7 +69,7 @@ func (h *oauthHandler) Token(c *gin.Context) {
 
 	accessToken, refreshToken, err := h.oauthService.Token(req.ClientID, req.ClientSecret, req.Code)
 	if err != nil {
-		response.Error(c, 401, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -88,7 +88,7 @@ func (h *oauthHandler) Userinfo(c *gin.Context) {
 
 	user, err := h.oauthService.Userinfo(token)
 	if err != nil {
-		response.Error(c, 401, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -128,7 +128,7 @@ func (h *oauthHandler) CreateApplication(c *gin.Context) {
 
 	app, err := h.oauthService.CreateApplication(req.Name, req.ClientSecret, req.RedirectURIs)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 

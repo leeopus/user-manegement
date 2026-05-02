@@ -1,0 +1,14 @@
+{
+  "title": "管理后台",
+  "welcome": "欢迎，",
+  "home": "首页",
+  "users": "用户管理",
+  "roles": "角色管理",
+  "permissions": "权限管理",
+  "ssoApps": "SSO 应用",
+  "totalUsers": "总用户数",
+  "totalRoles": "总角色数",
+  "ssoApplications": "SSO 应用数",
+  "overview": "概览",
+  "statistics": "统计信息"
+}

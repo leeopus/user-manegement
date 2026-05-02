@@ -41,7 +41,7 @@ func (h *userHandler) ListUsers(c *gin.Context) {
 
 	users, total, err := h.userService.ListUsers(page, pageSize)
 	if err != nil {
-		response.Error(c, 500, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -62,7 +62,7 @@ func (h *userHandler) GetUser(c *gin.Context) {
 
 	user, err := h.userService.GetUser(uint(id))
 	if err != nil {
-		response.Error(c, 404, "user not found")
+		response.Error(c, err)
 		return
 	}
 
@@ -78,7 +78,7 @@ func (h *userHandler) CreateUser(c *gin.Context) {
 
 	user, err := h.userService.CreateUser(req.Username, req.Email, req.Password)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -100,7 +100,7 @@ func (h *userHandler) UpdateUser(c *gin.Context) {
 
 	user, err := h.userService.UpdateUser(uint(id), req.Username, req.Email)
 	if err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 
@@ -115,7 +115,7 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 	}
 
 	if err := h.userService.DeleteUser(uint(id)); err != nil {
-		response.Error(c, 400, err.Error())
+		response.Error(c, err)
 		return
 	}
 

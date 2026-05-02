@@ -1,0 +1,13 @@
+{
+  "title": "用户管理",
+  "addUser": "添加用户",
+  "usersList": "用户列表",
+  "loading": "加载中...",
+  "noUsers": "未找到用户",
+  "actions": "操作",
+  "edit": "编辑",
+  "delete": "删除",
+  "confirmDelete": "确认要删除此用户吗？",
+  "userDetails": "用户详情",
+  "assignRole": "分配角色"
+}

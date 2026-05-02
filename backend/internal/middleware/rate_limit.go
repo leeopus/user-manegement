@@ -47,8 +47,15 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 		blocked, _ := rl.redis.Get(context.Background(), blockedKey).Result()
 		if blocked != "" {
 			c.JSON(429, gin.H{
-				"code":    429,
-				"message": "请求过于频繁，请稍后再试",
+				"success": false,
+				"error": gin.H{
+					"code":    "RATE_LIMIT_BLOCKED_429",
+					"message": "RATE_LIMIT_BLOCKED",
+					"details": gin.H{
+						"reason":        "IP is blocked due to too many requests",
+						"block_duration": int(config.BlockDuration.Minutes()),
+					},
+				},
 			})
 			c.Abort()
 			return
@@ -76,8 +83,16 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 			}
 
 			c.JSON(429, gin.H{
-				"code":    429,
-				"message": fmt.Sprintf("请求过于频繁，请在 %d 分钟后重试", int(config.BlockDuration.Minutes())),
+				"success": false,
+				"error": gin.H{
+					"code":    "RATE_LIMIT_EXCEEDED_429",
+					"message": "RATE_LIMIT_EXCEEDED",
+					"details": gin.H{
+						"max_requests":   config.MaxRequests,
+						"window":         config.Window.String(),
+						"block_duration": int(config.BlockDuration.Minutes()),
+					},
+				},
 			})
 			c.Abort()
 			return
@@ -97,9 +112,9 @@ func RegisterRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	rl := NewRateLimiter(redisClient)
 
 	config := RateLimitConfig{
-		MaxRequests:   3,                // 每小时最多3次注册
-		Window:        1 * time.Hour,    // 1小时窗口
-		BlockDuration: 24 * time.Hour,   // 封禁24小时
+		MaxRequests:   10,               // 开发环境：每10分钟最多10次注册
+		Window:        10 * time.Minute, // 10分钟窗口
+		BlockDuration: 1 * time.Hour,    // 封禁1小时
 	}
 
 	return rl.RateLimit(config)
@@ -110,9 +125,9 @@ func LoginRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	rl := NewRateLimiter(redisClient)
 
 	config := RateLimitConfig{
-		MaxRequests:   10,               // 每15分钟最多10次登录
-		Window:        15 * time.Minute, // 15分钟窗口
-		BlockDuration: 1 * time.Hour,    // 封禁1小时
+		MaxRequests:   10,               // 开发环境：每10分钟最多10次登录
+		Window:        10 * time.Minute, // 10分钟窗口
+		BlockDuration: 30 * time.Minute, // 封禁30分钟
 	}
 
 	return rl.RateLimit(config)
@@ -149,5 +164,9 @@ func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string) (int, error) 
 // ResetRateLimit 重置限流（管理员功能）
 func (rl *RateLimiter) ResetRateLimit(path, clientIP string) error {
 	key := fmt.Sprintf("rate_limit:%s:%s", path, clientIP)
-	return rl.redis.Del(context.Background(), key).Err()
+	blockedKey := fmt.Sprintf("rate_limit:blocked:%s", clientIP)
+
+	// 清除计数和封禁
+	rl.redis.Del(context.Background(), key)
+	return rl.redis.Del(context.Background(), blockedKey).Err()
 }

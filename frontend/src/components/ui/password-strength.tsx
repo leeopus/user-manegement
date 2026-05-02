@@ -1,5 +1,6 @@
 "use client"
 
+import { useTranslations } from 'next-intl'
 import { PasswordStrength as StrengthLevel } from "@/lib/validation"
 
 interface PasswordStrengthProps {
@@ -8,6 +9,8 @@ interface PasswordStrengthProps {
 }
 
 export function PasswordStrength({ strength, score = 0 }: PasswordStrengthProps) {
+  const t = useTranslations('passwordStrength')
+
   const getStrengthColor = (level: StrengthLevel) => {
     switch (level) {
       case StrengthLevel.Weak:
@@ -26,15 +29,15 @@ export function PasswordStrength({ strength, score = 0 }: PasswordStrengthProps)
   const getStrengthText = (level: StrengthLevel) => {
     switch (level) {
       case StrengthLevel.Weak:
-        return "弱"
+        return t('weak')
       case StrengthLevel.Fair:
-        return "中等"
+        return t('medium')
       case StrengthLevel.Good:
-        return "强"
+        return t('strong')
       case StrengthLevel.Strong:
-        return "很强"
+        return t('veryStrong')
       default:
-        return "未知"
+        return t('unknown')
     }
   }
 
@@ -66,12 +69,7 @@ export function PasswordStrength({ strength, score = 0 }: PasswordStrengthProps)
         ))}
       </div>
       <p className="text-xs text-gray-600">
-        密码强度: <span className={`font-semibold ${
-          strength === StrengthLevel.Weak ? "text-red-600" :
-          strength === StrengthLevel.Fair ? "text-yellow-600" :
-          strength === StrengthLevel.Good ? "text-green-600" :
-          "text-emerald-600"
-        }`}>{getStrengthText(strength)}</span>
+        {t('label', { fallback: '密码强度：' })} {getStrengthText(strength)}
       </p>
     </div>
   )
