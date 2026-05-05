@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/user-system/backend/internal/config"
 )
@@ -8,28 +11,34 @@ import (
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
+		origin := c.Request.Header.Get("Origin")
 
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		allowedOrigin := ""
 		if len(cfg.CORS.Origins) > 0 {
-			origin := c.Request.Header.Get("Origin")
-			allowed := false
 			for _, o := range cfg.CORS.Origins {
-				if o == "*" || o == origin {
-					allowed = true
+				if o == origin {
+					allowedOrigin = origin
 					break
 				}
 			}
-			if allowed {
-				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			// 默认允许 localhost 开发环境
+			if strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
+				allowedOrigin = origin
 			}
 		}
 
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		if allowedOrigin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+		// 不设置 ACAO 和 Credentials 时，浏览器会阻止跨域请求，这是预期行为
+
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 

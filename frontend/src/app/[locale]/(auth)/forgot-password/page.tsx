@@ -96,7 +96,7 @@ export default function ForgotPasswordPage() {
               <div className="text-center text-sm">
                 <Link
                   href="/login"
-                  className="inline-flex items-center text-blue-600 hover:text-blue-700 font-medium"
+                  className="inline-flex items-center font-medium text-blue-600 hover:text-blue-700"
                 >
                   <ArrowLeft className="h-4 w-4 mr-1" />
                   {t('backToLogin')}
@@ -105,8 +105,8 @@ export default function ForgotPasswordPage() {
             </form>
           ) : (
             <div className="text-center space-y-4">
-              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
-                <svg className="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
+                <svg className="h-8 w-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
@@ -119,7 +119,7 @@ export default function ForgotPasswordPage() {
               <div className="pt-4">
                 <Link
                   href="/login"
-                  className="inline-flex items-center text-blue-600 hover:text-blue-700 font-medium"
+                  className="inline-flex items-center font-medium text-blue-600 hover:text-blue-700 text-sm"
                 >
                   <ArrowLeft className="h-4 w-4 mr-1" />
                   {t('backToLogin')}
@@ -128,6 +128,11 @@ export default function ForgotPasswordPage() {
             </div>
           )}
         </div>
+
+        {/* Footer */}
+        <p className="mt-8 text-center text-xs text-gray-500">
+          {tc('copyright')}
+        </p>
       </div>
     </div>
   )

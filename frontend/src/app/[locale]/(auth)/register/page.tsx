@@ -10,16 +10,14 @@ import { PasswordStrength } from "@/components/ui/password-strength"
 import { api } from "@/lib/api"
 import { useErrorHandler } from "@/lib/use-error-handler"
 import {
-  validateUsername,
   validateEmail,
   validatePassword,
   PasswordStrength as StrengthLevel,
 } from "@/lib/validation"
 import { Link } from "@/i18n/routing"
-import { User, Mail, Lock, Eye, EyeOff, Check } from "lucide-react"
+import { Mail, Lock, Eye, EyeOff, Check } from "lucide-react"
 
 interface ValidationErrors {
-  username?: string
   email?: string
   password?: string
 }
@@ -27,9 +25,9 @@ interface ValidationErrors {
 export default function RegisterPage() {
   const t = useTranslations('auth')
   const tc = useTranslations('common')
-  const tv = useTranslations('validation') // validation 命名空间
+  const tv = useTranslations('validation')
   const router = useRouter()
-  const [username, setUsername] = useState("")
+  const { getError } = useErrorHandler()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
@@ -41,18 +39,21 @@ export default function RegisterPage() {
   })
   const [showPassword, setShowPassword] = useState(false)
 
-  // 实时验证用户名
-  useEffect(() => {
-    if (username) {
-      const result = validateUsername(username)
-      setValidationErrors(prev => ({
-        ...prev,
-        username: result.valid ? undefined : result.error,
-      }))
-    } else {
-      setValidationErrors(prev => ({ ...prev, username: undefined }))
+  // 翻译验证错误 key 为当前语言的文本
+  const translateError = (errorKey?: string): string | undefined => {
+    if (!errorKey) return undefined
+    // errorKey 格式: "validation.username.required" -> 去掉 "validation." 前缀
+    const path = errorKey.replace('validation.', '')
+    const parts = path.split('.')
+    if (parts.length === 2) {
+      try {
+        return tv(`${parts[0]}.${parts[1]}`)
+      } catch {
+        return errorKey
+      }
     }
-  }, [username])
+    return errorKey
+  }
 
   // 实时验证邮箱
   useEffect(() => {
@@ -70,7 +71,7 @@ export default function RegisterPage() {
   // 实时验证密码强度
   useEffect(() => {
     if (password) {
-      const result = validatePassword(password, username)
+      const result = validatePassword(password, "")
       setPasswordStrength({
         strength: result.strength,
         score: result.strength + 1,
@@ -83,18 +84,15 @@ export default function RegisterPage() {
       setPasswordStrength({ strength: StrengthLevel.Weak, score: 0 })
       setValidationErrors(prev => ({ ...prev, password: undefined }))
     }
-  }, [password, username])
+  }, [password])
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    // 最终验证
-    const usernameResult = validateUsername(username)
     const emailResult = validateEmail(email)
-    const passwordResult = validatePassword(password, username)
+    const passwordResult = validatePassword(password, "")
 
     const errors: ValidationErrors = {}
-    if (!usernameResult.valid) errors.username = usernameResult.error
     if (!emailResult.valid) errors.email = emailResult.error
     if (passwordResult.error) errors.password = passwordResult.error
 
@@ -107,9 +105,7 @@ export default function RegisterPage() {
     setError("")
 
     try {
-      await api.register({ username, email, password })
-
-      // 注册成功，跳转到登录页
+      await api.register({ email, password })
       router.push("/login?registered=true")
     } catch (err) {
       console.error("Registration error:", err)
@@ -119,7 +115,7 @@ export default function RegisterPage() {
     }
   }
 
-  const isFormValid = username && email && password && !validationErrors.username && !validationErrors.email && !validationErrors.password && passwordStrength.strength >= StrengthLevel.Fair
+  const isFormValid = email && password && !validationErrors.email && !validationErrors.password
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 px-4 py-12 sm:px-6 lg:px-8">
@@ -137,38 +133,7 @@ export default function RegisterPage() {
 
         {/* Form Card */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-8 py-8">
-          <form onSubmit={handleRegister} className="space-y-5">
-            {/* Username */}
-            <div>
-              <Label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
-                {t('username')}
-              </Label>
-              <div className="relative">
-                <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
-                <Input
-                  id="username"
-                  type="text"
-                  placeholder={t('usernamePlaceholder')}
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className={`pl-10 h-11 ${
-                    validationErrors.username
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                      : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500'
-                  }`}
-                  required
-                />
-                {username && !validationErrors.username && (
-                  <Check className="absolute right-3 top-1/2 transform -translate-y-1/2 text-green-500 h-5 w-5" />
-                )}
-              </div>
-              {validationErrors.username && (
-                <p className="mt-1.5 text-sm text-red-600">
-                  {validationErrors.username}
-                </p>
-              )}
-            </div>
-
+          <form onSubmit={handleRegister} className="space-y-6">
             {/* Email */}
             <div>
               <Label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
@@ -195,7 +160,7 @@ export default function RegisterPage() {
               </div>
               {validationErrors.email && (
                 <p className="mt-1.5 text-sm text-red-600">
-                  {validationErrors.email}
+                  {translateError(validationErrors.email)}
                 </p>
               )}
             </div>
@@ -235,39 +200,39 @@ export default function RegisterPage() {
               )}
               {validationErrors.password && (
                 <p className="mt-1.5 text-sm text-red-600">
-                  {validationErrors.password}
+                  {translateError(validationErrors.password)}
                 </p>
               )}
             </div>
 
             {/* Password Requirements */}
             {password && (
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                <p className="text-xs font-semibold text-gray-700">{t('passwordRequirements')}</p>
+              <div className="bg-blue-50 rounded-lg p-4 space-y-2">
+                <p className="text-xs font-semibold text-gray-700">{tv('passwordRequirements')}</p>
                 <ul className="text-xs text-gray-600 space-y-1.5">
-                  <li className={`flex items-center ${password.length >= 8 ? 'text-green-600' : ''}`}>
-                    {password.length >= 8 ? (
+                  <li className={`flex items-center ${password.length >= 12 ? 'text-green-600' : 'text-blue-600'}`}>
+                    {password.length >= 12 ? (
                       <Check className="h-3 w-3 mr-2" />
                     ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-gray-300 rounded-full" />
+                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
                     )}
                     {tv('requirements.length')}
                   </li>
-                  <li className={`flex items-center ${/[a-z]/.test(password) && /\d/.test(password) ? 'text-green-600' : ''}`}>
+                  <li className={`flex items-center ${/[a-z]/.test(password) && /\d/.test(password) ? 'text-green-600' : 'text-blue-600'}`}>
                     {/[a-z]/.test(password) && /\d/.test(password) ? (
                       <Check className="h-3 w-3 mr-2" />
                     ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-gray-300 rounded-full" />
+                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
                     )}
                     {tv('requirements.complexity')}
                   </li>
-                  <li className={`flex items-center ${!password.toLowerCase().includes(username.toLowerCase()) ? 'text-green-600' : ''}`}>
-                    {!password.toLowerCase().includes(username.toLowerCase()) ? (
+                  <li className={`flex items-center ${passwordStrength.strength >= StrengthLevel.Good ? 'text-green-600' : 'text-blue-600'}`}>
+                    {passwordStrength.strength >= StrengthLevel.Good ? (
                       <Check className="h-3 w-3 mr-2" />
                     ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-gray-300 rounded-full" />
+                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
                     )}
-                    {tv('requirements.unique')}
+                    {tv('passwordStrength')}
                   </li>
                 </ul>
               </div>

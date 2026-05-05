@@ -6,70 +6,24 @@ import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-
-interface User {
-  ID: number
-  Username: string
-  Email: string
-  Avatar?: string
-  Status?: string
-  CreatedAt: string
-}
+import { useAuth } from "@/lib/auth-provider"
+import type { User } from "@/lib/types"
 
 export default function ProfilePage() {
   const t = useTranslations('profile')
   const router = useRouter()
-  const [user, setUser] = useState<User | null>(null)
-
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        // 通过API获取用户信息，而不是依赖localStorage
-        const response = await fetch("http://localhost:8080/api/v1/auth/me", {
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        })
-
-        const data = await response.json()
-        if (data.success && data.data) {
-          setUser(data.data)
-          // 仅用于显示，不包含敏感token信息
-          localStorage.setItem("user", JSON.stringify(data.data))
-        } else {
-          router.push("/login")
-        }
-      } catch (err) {
-        console.error("Failed to fetch profile:", err)
-        router.push("/login")
-      }
-    }
-
-    fetchProfile()
-  }, [router])
+  const { user, logout, loading: authLoading } = useAuth()
 
   const handleLogout = async () => {
-    try {
-      // 调用登出API清除httpOnly cookie
-      await fetch("http://localhost:8080/api/v1/auth/logout", {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      })
-    } catch (err) {
-      console.error("Logout failed:", err)
-    } finally {
-      // 清除本地用户信息
-      localStorage.removeItem("user")
-      router.push("/login")
-    }
+    await logout()
+  }
+
+  if (authLoading) {
+    return <div className="min-h-screen flex items-center justify-center">{t('status', { fallback: 'Loading...' })}</div>
   }
 
   if (!user) {
-    return <div className="min-h-screen flex items-center justify-center">{t('status', { fallback: 'Loading...' })}</div>
+    return null
   }
 
   return (
@@ -119,7 +73,7 @@ export default function ProfilePage() {
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-600">{t('registrationTime')}</label>
-                  <p className="text-lg">{new Date(user.CreatedAt).toLocaleDateString()}</p>
+                  <p className="text-lg">{user.CreatedAt ? new Date(user.CreatedAt).toLocaleDateString() : '-'}</p>
                 </div>
               </div>
 
@@ -135,7 +89,7 @@ export default function ProfilePage() {
                 <h3 className="font-medium mb-3">{t('quickLinks')}</h3>
                 <div className="space-y-2">
                   <Button variant="outline" className="w-full justify-start" onClick={() => router.push("/dashboard")}>
-                    🛠️ {t('adminPanel')}
+                    {t('adminPanel')}
                   </Button>
                   <p className="text-xs text-gray-500">{t('adminOnly')}</p>
                 </div>

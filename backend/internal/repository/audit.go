@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"time"
+
 	"gorm.io/gorm"
 )
 
@@ -59,11 +61,11 @@ func (r *auditLogRepository) List(offset, limit int) ([]AuditLog, int64, error) 
 }
 
 type UserRole struct {
-	UserID    uint `gorm:"primaryKey"`
-	RoleID    uint `gorm:"primaryKey"`
-	User      User `gorm:"foreignKey:UserID"`
-	Role      Role `gorm:"foreignKey:RoleID"`
-	CreatedAt gorm.DeletedAt
+	UserID    uint      `gorm:"primaryKey"`
+	RoleID    uint      `gorm:"primaryKey"`
+	User      User      `gorm:"foreignKey:UserID"`
+	Role      Role      `gorm:"foreignKey:RoleID"`
+	CreatedAt time.Time
 }
 
 type RolePermission struct {
@@ -71,5 +73,5 @@ type RolePermission struct {
 	PermissionID uint       `gorm:"primaryKey"`
 	Role         Role       `gorm:"foreignKey:RoleID"`
 	Permission   Permission `gorm:"foreignKey:PermissionID"`
-	CreatedAt    gorm.DeletedAt
+	CreatedAt    time.Time
 }

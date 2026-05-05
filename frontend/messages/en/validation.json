@@ -24,7 +24,7 @@
     "mismatch": "Passwords do not match"
   },
   "passwordStrength": "Password strength",
-  "passwordRequirements": "Password requirements:",
+  "passwordRequirements": "Password suggestions (optional):",
   "requirements": {
     "length": "At least 8 characters",
     "complexity": "Contains lowercase letters and numbers",

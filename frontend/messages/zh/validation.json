@@ -24,7 +24,7 @@
     "mismatch": "两次输入的密码不一致"
   },
   "passwordStrength": "密码强度",
-  "passwordRequirements": "密码要求：",
+  "passwordRequirements": "密码建议（可选）：",
   "requirements": {
     "length": "至少 8 位字符",
     "complexity": "包含小写字母和数字",

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,8 +26,7 @@ func main() {
 	// 全局错误恢复机制
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("❌ Recovered from panic: %v", r)
-			// 这里可以添加：记录到监控系统、发送告警、清理资源等
+			log.Printf("Recovered from panic: %v", r)
 		}
 	}()
 
@@ -34,7 +37,6 @@ func main() {
 
 	// Initialize logger
 	cfg := config.Get()
-	// Note: Logger initialization is optional in dev mode
 	_ = cfg
 
 	// Connect to Redis
@@ -56,9 +58,9 @@ func main() {
 		log.Fatalf("Failed to get database connection: %v", err)
 	}
 
-	sqlDB.SetMaxIdleConns(10)           // 最大空闲连接数
-	sqlDB.SetMaxOpenConns(100)          // 最大连接数
-	sqlDB.SetConnMaxLifetime(time.Hour) // 连接最大生存时间
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	log.Println("Database connected successfully")
 
@@ -89,14 +91,13 @@ func main() {
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	// Initialize services
-	// 根据环境变量选择邮件服务
 	smtpConfig := email.GetSMTPConfig()
 	var emailService email.EmailService
 	if smtpConfig.Host != "" && smtpConfig.Username != "" {
-		fmt.Println("📧 使用SMTP邮件服务")
+		fmt.Println("Using SMTP email service")
 		emailService = email.NewSMTPEmailService(smtpConfig)
 	} else {
-		fmt.Println("📧 使用开发环境邮件服务 (控制台输出)")
+		fmt.Println("Using development email service (console output)")
 		emailService = email.NewDevelopmentEmailService()
 	}
 
@@ -122,13 +123,43 @@ func main() {
 	}
 
 	r := gin.New()
-	r.Use(middleware.Recovery(zap.L())) // 使用我们的自定义恢复中间件
+	r.Use(middleware.Recovery(zap.L()))
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 
-	// Health check
+	// Health check（包含依赖检查）
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		status := gin.H{"status": "ok"}
+
+		// 检查数据库
+		if sqlDB != nil {
+			if err := sqlDB.Ping(); err != nil {
+				status["database"] = "unhealthy"
+				status["status"] = "degraded"
+			} else {
+				status["database"] = "ok"
+			}
+		}
+
+		// 检查 Redis
+		if redis.Client != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := redis.Client.Ping(ctx).Err(); err != nil {
+				status["redis"] = "unhealthy"
+				status["status"] = "degraded"
+			} else {
+				status["redis"] = "ok"
+			}
+		} else {
+			status["redis"] = "disabled"
+		}
+
+		httpStatus := 200
+		if status["status"] != "ok" {
+			httpStatus = 503
+		}
+		c.JSON(httpStatus, status)
 	})
 
 	// CSRF token endpoint (no auth required)
@@ -159,14 +190,18 @@ func main() {
 		{
 			users.GET("", userHandler.ListUsers)
 			users.GET("/:id", userHandler.GetUser)
-			users.POST("", userHandler.CreateUser)
-			users.PUT("/:id", userHandler.UpdateUser)
-			users.DELETE("/:id", userHandler.DeleteUser)
+		}
+		usersAdmin := v1.Group("/users")
+		usersAdmin.Use(middleware.Auth(), middleware.RequireRole(db, "admin"))
+		{
+			usersAdmin.POST("", userHandler.CreateUser)
+			usersAdmin.PUT("/:id", userHandler.UpdateUser)
+			usersAdmin.DELETE("/:id", userHandler.DeleteUser)
 		}
 
-		// Role routes (protected)
+		// Role routes (protected, admin only)
 		roles := v1.Group("/roles")
-		roles.Use(middleware.Auth())
+		roles.Use(middleware.Auth(), middleware.RequireRole(db, "admin"))
 		{
 			roles.GET("", roleHandler.ListRoles)
 			roles.GET("/:id", roleHandler.GetRole)
@@ -175,9 +210,9 @@ func main() {
 			roles.DELETE("/:id", roleHandler.DeleteRole)
 		}
 
-		// Permission routes (protected)
+		// Permission routes (protected, admin only)
 		permissions := v1.Group("/permissions")
-		permissions.Use(middleware.Auth())
+		permissions.Use(middleware.Auth(), middleware.RequireRole(db, "admin"))
 		{
 			permissions.GET("", permissionHandler.ListPermissions)
 			permissions.GET("/:id", permissionHandler.GetPermission)
@@ -206,10 +241,34 @@ func main() {
 		}
 	}
 
-	// Start server
+	// Graceful shutdown
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	zap.L().Info("Server starting", zap.String("port", cfg.Server.Port))
-	if err := r.Run(addr); err != nil {
-		zap.L().Fatal("Failed to start server", zap.Error(err))
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	// 在 goroutine 中启动服务器
+	go func() {
+		zap.L().Info("Server starting", zap.String("port", cfg.Server.Port))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			zap.L().Fatal("Failed to start server", zap.Error(err))
+		}
+	}()
+
+	// 等待中断信号
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+
+	zap.L().Info("Shutting down server...")
+
+	// 给正在处理的请求 10 秒时间完成
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		zap.L().Fatal("Server forced to shutdown", zap.Error(err))
+	}
+
+	zap.L().Info("Server exited gracefully")
 }

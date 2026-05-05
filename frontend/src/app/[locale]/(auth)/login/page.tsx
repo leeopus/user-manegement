@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { api } from "@/lib/api"
+import { useAuth } from "@/lib/auth-provider"
 import { useErrorHandler } from "@/lib/use-error-handler"
 import { Link } from "@/i18n/routing"
 import { Mail, Lock, Eye, EyeOff } from "lucide-react"
@@ -15,6 +15,7 @@ export default function LoginPage() {
   const t = useTranslations('auth')
   const tc = useTranslations('common')
   const { getError } = useErrorHandler()
+  const { login } = useAuth()
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -29,20 +30,7 @@ export default function LoginPage() {
     setError("")
 
     try {
-      const data = await api.login({ email, password, remember_me: rememberMe })
-
-      // Token 现在存储在 httpOnly cookie 中，前端无需手动存储
-      // 只需要存储用户信息到 localStorage（用于显示）
-      localStorage.setItem("user", JSON.stringify(data.user))
-
-      // 如果选择记住我，保存记住状态
-      if (rememberMe) {
-        localStorage.setItem("rememberMe", "true")
-      } else {
-        localStorage.removeItem("rememberMe")
-      }
-
-      // Redirect to profile page (user center)
+      await login(email, password, rememberMe)
       router.push("/profile")
     } catch (err) {
       console.error("Login error:", err)

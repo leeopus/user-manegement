@@ -28,7 +28,7 @@ type RequestResetRequest struct {
 
 type ResetPasswordRequest struct {
 	Token       string `json:"token" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required,min=8"`
+	NewPassword string `json:"new_password" binding:"required,min=8,max=64"`
 }
 
 type ValidateTokenRequest struct {

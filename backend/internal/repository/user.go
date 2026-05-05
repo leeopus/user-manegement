@@ -1,18 +1,20 @@
 package repository
 
 import (
+	"time"
+
 	"gorm.io/gorm"
 )
 
 type User struct {
 	gorm.Model
-	Username     string  `gorm:"size:50;uniqueIndex;not null"`
-	Email        string  `gorm:"size:100;uniqueIndex;not null"`
-	PasswordHash string  `gorm:"size:255;not null"`
-	Avatar       string  `gorm:"size:255"`
-	Status       string  `gorm:"size:20;default:active"`
-	LastLoginAt  *gorm.DeletedAt
-	Roles        []Role  `gorm:"many2many:user_roles;"`
+	Username     string     `gorm:"size:50;uniqueIndex" json:"username"`
+	Email        string     `gorm:"size:100;uniqueIndex;not null" json:"email"`
+	PasswordHash string     `gorm:"size:255;not null" json:"-"`
+	Avatar       string     `gorm:"size:255" json:"avatar"`
+	Status       string     `gorm:"size:20;default:active" json:"status"`
+	LastLoginAt  *time.Time `gorm:"" json:"last_login_at"`
+	Roles        []Role     `gorm:"many2many:user_roles;" json:"roles"`
 }
 
 type UserRepository interface {
@@ -24,6 +26,7 @@ type UserRepository interface {
 	Delete(id uint) error
 	List(offset, limit int) ([]User, int64, error)
 	UpdateLastLogin(id uint) error
+	GetUserRoles(userID uint) ([]Role, error)
 }
 
 type userRepository struct {
@@ -86,5 +89,15 @@ func (r *userRepository) List(offset, limit int) ([]User, int64, error) {
 }
 
 func (r *userRepository) UpdateLastLogin(id uint) error {
-	return r.db.Model(&User{}).Where("id = ?", id).Update("last_login_at", gorm.Expr("NOW()")).Error
+	now := time.Now()
+	return r.db.Model(&User{}).Where("id = ?", id).Update("last_login_at", now).Error
+}
+
+func (r *userRepository) GetUserRoles(userID uint) ([]Role, error) {
+	var user User
+	err := r.db.Preload("Roles").Preload("Roles.Permissions").First(&user, userID).Error
+	if err != nil {
+		return nil, err
+	}
+	return user.Roles, nil
 }

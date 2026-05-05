@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/user-system/backend/pkg/jwt"
 	"github.com/user-system/backend/pkg/response"
@@ -31,7 +33,7 @@ func Auth() gin.HandlerFunc {
 						newAccessToken, err := utils.GenerateToken(claims.UserID, claims.Username, claims.Email)
 						if err == nil {
 							// 设置新的 access token cookie (15分钟)
-							jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 15*60)
+							jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 15*time.Minute)
 							tokenString = newAccessToken
 						}
 					}

@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"math/rand"
 	"regexp"
 	"strings"
 	"unicode"
@@ -28,15 +29,15 @@ type PasswordPolicy struct {
 	ForbidUsername  bool
 }
 
-// 默认密码策略（平衡模式）
+// 默认密码策略（平衡模式 - 降低门槛）
 var DefaultPasswordPolicy = PasswordPolicy{
 	MinLength:      8,
 	MaxLength:      64,
 	RequireUpper:   false,
-	RequireLower:   true,
-	RequireNumber:  true,
+	RequireLower:   false,
+	RequireNumber:  false,
 	RequireSpecial: false,
-	ForbidUsername: true,
+	ForbidUsername: false,
 }
 
 // 常见弱密码列表（示例）
@@ -46,11 +47,11 @@ var CommonPasswords = []string{
 	"password123", "admin123", "welcome1", "login123", "passw0rd",
 }
 
-// ValidatePassword 验证密码强度和规则
+// ValidatePassword 验证密码强度和规则（平衡模式）
 func ValidatePassword(password, username string) (PasswordStrength, error) {
 	policy := DefaultPasswordPolicy
 
-	// 检查长度
+	// 检查长度（硬性要求）
 	if len(password) < policy.MinLength {
 		return PasswordWeak, errors.New("密码至少8位")
 	}
@@ -80,14 +81,16 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 		}
 	}
 
-	// 根据长度评分
-	if len(password) >= 12 {
-		score += 2
+	// 根据长度评分（更重视长度）
+	if len(password) >= 16 {
+		score += 4
+	} else if len(password) >= 12 {
+		score += 3
 	} else if len(password) >= 8 {
 		score += 1
 	}
 
-	// 根据字符类型评分
+	// 根据字符类型评分（鼓励但不强制）
 	if hasLower {
 		score += 1
 	}
@@ -98,33 +101,10 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 		score += 1
 	}
 	if hasSpecial {
-		score += 2
+		score += 1
 	}
 
-	// 检查必需字符类型
-	if policy.RequireLower && !hasLower {
-		return PasswordWeak, errors.New("密码必须包含小写字母")
-	}
-	if policy.RequireUpper && !hasUpper {
-		return PasswordWeak, errors.New("密码必须包含大写字母")
-	}
-	if policy.RequireNumber && !hasNumber {
-		return PasswordWeak, errors.New("密码必须包含数字")
-	}
-	if policy.RequireSpecial && !hasSpecial {
-		return PasswordWeak, errors.New("密码必须包含特殊字符")
-	}
-
-	// 检查是否包含用户名
-	if policy.ForbidUsername && username != "" && len(username) >= 3 {
-		lowerPassword := strings.ToLower(password)
-		lowerUsername := strings.ToLower(username)
-		if strings.Contains(lowerPassword, lowerUsername) {
-			return PasswordWeak, errors.New("密码不能包含用户名")
-		}
-	}
-
-	// 检查常见弱密码
+	// 只检查常见弱密码和明显安全问题
 	for _, common := range CommonPasswords {
 		if strings.EqualFold(password, common) {
 			return PasswordWeak, errors.New("密码过于简单，请使用更复杂的密码")
@@ -136,7 +116,7 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 		return PasswordWeak, errors.New("密码不能全是相同字符")
 	}
 
-	// 计算强度等级
+	// 计算强度等级（更宽松）
 	var strength PasswordStrength
 	if score <= 2 {
 		strength = PasswordWeak
@@ -312,4 +292,58 @@ func GetPasswordStrengthColor(strength PasswordStrength) string {
 	default:
 		return "gray"
 	}
+}
+
+// GenerateUsernameFromEmail 从email自动生成username
+func GenerateUsernameFromEmail(email string) string {
+	// 提取@之前的部分
+	parts := strings.Split(email, "@")
+	if len(parts) == 0 {
+		return "user"
+	}
+
+	localPart := parts[0]
+
+	// 处理Gmail风格的+号（user+tag@gmail.com -> user）
+	if plusIndex := strings.Index(localPart, "+"); plusIndex > 0 {
+		localPart = localPart[:plusIndex]
+	}
+
+	// 移除点号（user.name@gmail.com -> username）
+	localPart = strings.ReplaceAll(localPart, ".", "")
+
+	// 转换为小写
+	localPart = strings.ToLower(localPart)
+
+	// 如果为空或太短，使用默认值
+	if len(localPart) < 3 {
+		return "user"
+	}
+
+	// 截断过长的用户名（保留前20个字符）
+	if len(localPart) > 20 {
+		localPart = localPart[:20]
+	}
+
+	// 确保符合用户名格式（字母开头）
+	if len(localPart) > 0 && !isAlpha(rune(localPart[0])) {
+		localPart = "user_" + localPart
+	}
+
+	return localPart
+}
+
+// RandomSuffix 生成指定长度的随机数字后缀
+func RandomSuffix(length int) string {
+	const digits = "0123456789"
+	result := make([]byte, length)
+	for i := range result {
+		result[i] = digits[rand.Intn(len(digits))]
+	}
+	return string(result)
+}
+
+// isAlpha 检查字符是否为字母
+func isAlpha(c rune) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

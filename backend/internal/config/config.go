@@ -33,9 +33,9 @@ type RedisConfig struct {
 }
 
 type JWTConfig struct {
-	Secret             string        `mapstructure:"secret"`
-	Expiration         time.Duration `mapstructure:"expiration"`
-	RefreshExpiration  time.Duration `mapstructure:"refresh_expiration"`
+	Secret            string        `mapstructure:"secret"`
+	Expiration        time.Duration `mapstructure:"expiration"`
+	RefreshExpiration time.Duration `mapstructure:"refresh_expiration"`
 }
 
 type CORSConfig struct {
@@ -43,6 +43,19 @@ type CORSConfig struct {
 }
 
 var AppConfig *Config
+
+// flatToNested 定义 .env 文件中的 flat key 到 viper 嵌套 key 的映射
+var flatToNested = map[string]string{
+	"DATABASE_URL":              "database.url",
+	"REDIS_URL":                 "redis.url",
+	"JWT_SECRET":                "jwt.secret",
+	"JWT_EXPIRATION":            "jwt.expiration",
+	"REFRESH_TOKEN_EXPIRATION":  "jwt.refresh_expiration",
+	"SERVER_PORT":               "server.port",
+	"SERVER_GIN_MODE":           "server.gin_mode",
+	"FRONTEND_URL":              "frontend.url",
+	"CORS_ORIGINS":              "cors.origins",
+}
 
 func Load(configPath string) error {
 	viper.SetConfigFile(configPath)
@@ -55,20 +68,27 @@ func Load(configPath string) error {
 	viper.SetDefault("jwt.refresh_expiration", "720h")
 	viper.SetDefault("cors.origins", []string{"http://localhost:3000"})
 	viper.SetDefault("redis.url", "redis://localhost:6379/0")
-	viper.SetDefault("frontend.url", "http://localhost:3000") // Add default for frontend URL
-	viper.SetDefault("database.url", "postgres://admin:admin123@localhost:5432/user_system?sslmode=disable") // Add default for database URL
+	viper.SetDefault("frontend.url", "http://localhost:3000")
 
-	// Read from config file
+	// Read from config file (.env)
 	if err := viper.ReadInConfig(); err != nil {
 		return err
 	}
 
-	// Bind environment variables for nested structures
-	viper.BindEnv("frontend.url", "FRONTEND_URL")
-	viper.BindEnv("database.url", "DATABASE_URL") // 绑定数据库URL环境变量
-	viper.BindEnv("redis.url", "REDIS_URL")       // 绑定Redis URL环境变量
+	// 将 .env 文件中的 flat key（如 DATABASE_URL）映射到嵌套 key（如 database.url）
+	// Viper 读取 .env 时不会自动做下划线到点号的转换
+	for flatKey, nestedKey := range flatToNested {
+		if val := viper.GetString(flatKey); val != "" {
+			viper.Set(nestedKey, val)
+		}
+	}
 
-	// Read from environment (will override config file)
+	// 真正的 OS 环境变量也可以覆盖（通过 BindEnv）
+	viper.BindEnv("database.url", "DATABASE_URL")
+	viper.BindEnv("redis.url", "REDIS_URL")
+	viper.BindEnv("jwt.secret", "JWT_SECRET")
+	viper.BindEnv("server.port", "SERVER_PORT")
+	viper.BindEnv("frontend.url", "FRONTEND_URL")
 	viper.AutomaticEnv()
 
 	AppConfig = &Config{}

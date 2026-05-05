@@ -4,6 +4,7 @@ import { getMessages, getTranslations } from 'next-intl/server';
 import { notFound } from 'next/navigation';
 import { routing } from '@/i18n/routing';
 import { LocalePreference } from '@/components/locale-preference';
+import { AuthProvider } from '@/lib/auth-provider';
 
 export function generateStaticParams() {
   return routing.locales.map((locale) => ({ locale }));
@@ -52,8 +53,10 @@ export default async function LocaleLayout({
   return (
     <div className="h-full antialiased min-h-full flex flex-col">
       <NextIntlClientProvider messages={messages}>
-        <LocalePreference />
-        {children}
+        <AuthProvider>
+          <LocalePreference />
+          {children}
+        </AuthProvider>
       </NextIntlClientProvider>
     </div>
   );

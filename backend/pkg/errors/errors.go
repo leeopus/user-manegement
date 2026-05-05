@@ -29,10 +29,14 @@ func New(code, messageKey string, httpStatus int) *AppError {
 	}
 }
 
-// WithDetails 添加错误详情
+// WithDetails 创建一个带有详情的新错误实例（不修改原对象，避免并发竞态）
 func (e *AppError) WithDetails(details map[string]interface{}) *AppError {
-	e.Details = details
-	return e
+	return &AppError{
+		Code:       e.Code,
+		MessageKey: e.MessageKey,
+		HTTPStatus: e.HTTPStatus,
+		Details:    details,
+	}
 }
 
 // =====================================================
