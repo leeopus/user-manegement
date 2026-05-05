@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -9,20 +10,25 @@ import (
 )
 
 func CORS() gin.HandlerFunc {
+	// 启动时一次性解析配置，避免每次请求重复读取
+	cfg := config.Get()
+	allowedOrigins := make(map[string]bool, len(cfg.CORS.Origins))
+	for _, o := range cfg.CORS.Origins {
+		allowedOrigins[o] = true
+	}
+	hasConfiguredOrigins := len(cfg.CORS.Origins) > 0
+	ginMode := os.Getenv("GIN_MODE")
+	allowAllLocalhost := ginMode != "release"
+
 	return func(c *gin.Context) {
-		cfg := config.Get()
 		origin := c.Request.Header.Get("Origin")
 
 		allowedOrigin := ""
-		if len(cfg.CORS.Origins) > 0 {
-			for _, o := range cfg.CORS.Origins {
-				if o == origin {
-					allowedOrigin = origin
-					break
-				}
+		if hasConfiguredOrigins {
+			if allowedOrigins[origin] {
+				allowedOrigin = origin
 			}
-		} else {
-			// 默认允许 localhost 开发环境
+		} else if allowAllLocalhost {
 			if strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
 				allowedOrigin = origin
 			}
@@ -31,11 +37,12 @@ func CORS() gin.HandlerFunc {
 		if allowedOrigin != "" {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			c.Writer.Header().Set("Vary", "Origin")
 		}
-		// 不设置 ACAO 和 Credentials 时，浏览器会阻止跨域请求，这是预期行为
 
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)

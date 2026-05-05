@@ -34,7 +34,7 @@ export default function ProfilePage() {
           <h1 className="text-xl font-bold">{t('title')}</h1>
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-600">
-              {user.Username || user.Email}
+              {user.username || user.email}
             </span>
             <Button variant="outline" size="sm" onClick={handleLogout}>
               {t('logout')}
@@ -57,23 +57,23 @@ export default function ProfilePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-gray-600">{t('username')}</label>
-                  <p className="text-lg">{user.Username}</p>
+                  <p className="text-lg">{user.username}</p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-600">{t('email')}</label>
-                  <p className="text-lg">{user.Email}</p>
+                  <p className="text-lg">{user.email}</p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-600">{t('status')}</label>
                   <div>
-                    <Badge variant={user.Status === "active" ? "default" : "secondary"}>
-                      {user.Status === "active" ? t('active') : t('inactive')}
+                    <Badge variant={user.status === "active" ? "default" : "secondary"}>
+                      {user.status === "active" ? t('active') : t('inactive')}
                     </Badge>
                   </div>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-600">{t('registrationTime')}</label>
-                  <p className="text-lg">{user.CreatedAt ? new Date(user.CreatedAt).toLocaleDateString() : '-'}</p>
+                  <p className="text-lg">{user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}</p>
                 </div>
               </div>
 

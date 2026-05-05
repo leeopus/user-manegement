@@ -150,24 +150,8 @@ export function debounce<T extends (...args: any[]) => any>(
   }
 }
 
-// 检查用户名是否可用（API调用）
-export async function checkUsernameAvailable(username: string): Promise<boolean> {
-  try {
-    const response = await fetch(`/api/v1/users/check-username?username=${encodeURIComponent(username)}`)
-    const data = await response.json()
-    return data.code === 0 && data.data.available
-  } catch {
-    return true
-  }
-}
+// 检查用户名是否可用（预留接口）
+// export async function checkUsernameAvailable(username: string): Promise<boolean> { ... }
 
-// 检查邮箱是否可用（API调用）
-export async function checkEmailAvailable(email: string): Promise<boolean> {
-  try {
-    const response = await fetch(`/api/v1/users/check-email?email=${encodeURIComponent(email)}`)
-    const data = await response.json()
-    return data.code === 0 && data.data.available
-  } catch {
-    return true
-  }
-}
+// 检查邮箱是否可用（预留接口）
+// export async function checkEmailAvailable(email: string): Promise<boolean> { ... }

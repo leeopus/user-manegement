@@ -4,15 +4,18 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PasswordResetTokenRepository 密码重置令牌仓库
 type PasswordResetTokenRepository interface {
 	Create(token *PasswordResetToken) error
-	FindByToken(token string) (*PasswordResetToken, error)
-	MarkAsUsed(token string) error
+	FindByTokenHash(tokenHash string) (*PasswordResetToken, error)
+	FindByTokenHashForUpdate(tx *gorm.DB, tokenHash string) (*PasswordResetToken, error)
+	MarkAsUsedByHash(tx *gorm.DB, tokenHash string) error
 	DeleteExpiredTokens() error
 	FindByEmail(email string) ([]PasswordResetToken, error)
+	Transaction(fn func(tx *gorm.DB) error) error
 }
 
 type passwordResetTokenRepository struct {
@@ -27,17 +30,26 @@ func (r *passwordResetTokenRepository) Create(token *PasswordResetToken) error {
 	return r.db.Create(token).Error
 }
 
-func (r *passwordResetTokenRepository) FindByToken(token string) (*PasswordResetToken, error) {
+func (r *passwordResetTokenRepository) FindByTokenHash(tokenHash string) (*PasswordResetToken, error) {
 	var resetToken PasswordResetToken
-	err := r.db.Where("token = ?", token).First(&resetToken).Error
+	err := r.db.Where("token_hash = ?", tokenHash).First(&resetToken).Error
 	if err != nil {
 		return nil, err
 	}
 	return &resetToken, nil
 }
 
-func (r *passwordResetTokenRepository) MarkAsUsed(token string) error {
-	return r.db.Model(&PasswordResetToken{}).Where("token = ?", token).Update("used", true).Error
+func (r *passwordResetTokenRepository) FindByTokenHashForUpdate(tx *gorm.DB, tokenHash string) (*PasswordResetToken, error) {
+	var resetToken PasswordResetToken
+	err := tx.Where("token_hash = ?", tokenHash).Clauses(clause.Locking{Strength: "UPDATE"}).First(&resetToken).Error
+	if err != nil {
+		return nil, err
+	}
+	return &resetToken, nil
+}
+
+func (r *passwordResetTokenRepository) MarkAsUsedByHash(tx *gorm.DB, tokenHash string) error {
+	return tx.Model(&PasswordResetToken{}).Where("token_hash = ?", tokenHash).Update("used", true).Error
 }
 
 func (r *passwordResetTokenRepository) DeleteExpiredTokens() error {
@@ -48,4 +60,8 @@ func (r *passwordResetTokenRepository) FindByEmail(email string) ([]PasswordRese
 	var tokens []PasswordResetToken
 	err := r.db.Where("email = ?", email).Find(&tokens).Error
 	return tokens, err
+}
+
+func (r *passwordResetTokenRepository) Transaction(fn func(tx *gorm.DB) error) error {
+	return r.db.Transaction(fn)
 }

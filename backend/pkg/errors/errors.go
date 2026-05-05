@@ -70,6 +70,13 @@ var (
 		http.StatusBadRequest,
 	)
 
+	// ErrRegisterSilent 注册静默成功（用于防止邮箱枚举：邮箱已存在时仍返回成功）
+	ErrRegisterSilent = New(
+		"AUTH_REGISTER_SILENT_200",
+		"AUTH_REGISTER_SUCCESS",
+		http.StatusOK,
+	)
+
 	ErrUsernameAlreadyExists = New(
 		"AUTH_REGISTER_USERNAME_EXISTS_400",
 		"AUTH_REGISTER_USERNAME_EXISTS",
@@ -231,6 +238,36 @@ var (
 		"USER_ALREADY_EXISTS",
 		http.StatusConflict,
 	)
+
+	ErrRoleNotFound = New(
+		"ROLE_NOT_FOUND_404",
+		"ROLE_NOT_FOUND",
+		http.StatusNotFound,
+	)
+
+	ErrPermissionNotFound = New(
+		"PERMISSION_NOT_FOUND_404",
+		"PERMISSION_NOT_FOUND",
+		http.StatusNotFound,
+	)
+
+	ErrRoleValidation = New(
+		"ROLE_VALIDATION_ERROR_400",
+		"ROLE_VALIDATION_ERROR",
+		http.StatusBadRequest,
+	)
+
+	ErrRoleCodeExists = New(
+		"ROLE_CODE_EXISTS_409",
+		"ROLE_CODE_EXISTS",
+		http.StatusConflict,
+	)
+
+	ErrValidationFailed = New(
+		"VALIDATION_FAILED_400",
+		"VALIDATION_FAILED",
+		http.StatusBadRequest,
+	)
 )
 
 // =====================================================
@@ -261,6 +298,18 @@ var (
 		"OAUTH_INVALID_REDIRECT_URI",
 		http.StatusBadRequest,
 	)
+
+	ErrOAuthInvalidState = New(
+		"OAUTH_INVALID_STATE_400",
+		"OAUTH_INVALID_STATE",
+		http.StatusBadRequest,
+	)
+
+	ErrOAuthInvalidScope = New(
+		"OAUTH_INVALID_SCOPE_400",
+		"OAUTH_INVALID_SCOPE",
+		http.StatusBadRequest,
+	)
 )
 
 // =====================================================
@@ -284,6 +333,12 @@ var (
 		"NETWORK_ERROR_503",
 		"NETWORK_ERROR",
 		http.StatusServiceUnavailable,
+	)
+
+	ErrCannotDeleteSelf = New(
+		"USER_CANNOT_DELETE_SELF_400",
+		"USER_CANNOT_DELETE_SELF",
+		http.StatusBadRequest,
 	)
 )
 

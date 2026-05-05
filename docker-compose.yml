@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # PostgreSQL 数据库（Debian 版本，更稳定）
+  # PostgreSQL 数据库
   postgres:
     image: postgres:15-bookworm
     container_name: user-system-postgres
@@ -9,11 +9,12 @@ services:
     environment:
       POSTGRES_DB: user_system
       POSTGRES_USER: admin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       PGDATA: /var/lib/postgresql/data/pgdata
       TZ: Asia/Shanghai
-    ports:
-      - "5432:5432"
+    # 不暴露端口到宿主机，仅通过内部网络访问
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,25 +32,25 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-    # 日志配置
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-  # Redis 缓存（Debian 版本，更稳定）
+  # Redis 缓存
   redis:
     image: redis:7-bookworm
     container_name: user-system-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # 不暴露端口到宿主机，仅通过内部网络访问
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required} --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -81,8 +82,9 @@ services:
     env_file:
       - .env.production
     environment:
-      - DATABASE_URL=postgres://admin:${POSTGRES_PASSWORD:-admin123}@postgres:5432/user_system?sslmode=disable
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - DATABASE_URL=postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/user_system?sslmode=disable
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AUTO_MIGRATE=false
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,7 +122,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://106.15.3.98:8080
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8080}
       - NODE_ENV=production
       - TZ=Asia/Shanghai
     depends_on:

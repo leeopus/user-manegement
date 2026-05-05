@@ -1,69 +1,47 @@
 /**
  * CSRF Token 管理
+ * Token 为一次性使用，每次请求前获取新 token
  */
 
-let csrfToken: string | null = null
-let tokenExpiry: number | null = null
-
-const TOKEN_CACHE_DURATION = 50 * 60 * 1000 // 50 分钟（token 1 小时过期）
+const CSRF_TIMEOUT_MS = 5000
 
 /**
- * 获取 CSRF token
+ * 带超时的 fetch 封装
+ */
+function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeoutId))
+}
+
+/**
+ * 获取新的 CSRF token
  */
 export async function getCSRFToken(): Promise<string> {
-  // 检查缓存
-  if (csrfToken && tokenExpiry && Date.now() < tokenExpiry) {
-    return csrfToken
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || ''
+  const url = baseURL ? `${baseURL}/api/csrf-token` : '/api/csrf-token'
+
+  const response = await fetchWithTimeout(url, {
+    method: 'GET',
+    credentials: 'include',
+  }, CSRF_TIMEOUT_MS)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch CSRF token')
   }
 
-  // 获取新 token
-  try {
-    const response = await fetch('/api/csrf-token', {
-      method: 'GET',
-      credentials: 'include', // 包含 cookie
-    })
+  const result = await response.json()
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch CSRF token')
-    }
-
-    const result = await response.json()
-
-    if (!result.success || !result.data?.csrf_token) {
-      throw new Error('Invalid CSRF token response')
-    }
-
-    csrfToken = result.data.csrf_token
-    tokenExpiry = Date.now() + TOKEN_CACHE_DURATION
-
-    return csrfToken
-  } catch (error) {
-    console.error('Failed to get CSRF token:', error)
-    throw error
+  if (!result.success || !result.data?.csrf_token) {
+    throw new Error('Invalid CSRF token response')
   }
+
+  return result.data.csrf_token
 }
 
 /**
- * 清除缓存的 CSRF token
- */
-export function clearCSRFToken(): void {
-  csrfToken = null
-  tokenExpiry = null
-}
-
-/**
- * 预加载 CSRF token（在用户操作前）
- */
-export async function preloadCSRFToken(): Promise<void> {
-  try {
-    await getCSRFToken()
-  } catch (error) {
-    console.warn('Failed to preload CSRF token:', error)
-  }
-}
-
-/**
- * 为 fetch 添加 CSRF token 到请求头
+ * 为 fetch 请求添加 CSRF token 到请求头
+ * 每次调用都获取新 token（一次性使用）
  */
 export async function addCSRFToHeaders(
   headers: HeadersInit

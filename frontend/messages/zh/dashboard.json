@@ -1,6 +1,8 @@
 {
   "title": "管理后台",
   "welcome": "欢迎，",
+  "loading": "加载中...",
+  "logout": "退出登录",
   "home": "首页",
   "users": "用户管理",
   "roles": "角色管理",

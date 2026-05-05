@@ -1,11 +1,12 @@
 package utils
 
 import (
+	"crypto/rand"
 	"errors"
-	"math/rand"
+	"fmt"
+	"math/big"
 	"regexp"
 	"strings"
-	"unicode"
 )
 
 // 密码强度等级
@@ -29,16 +30,19 @@ type PasswordPolicy struct {
 	ForbidUsername  bool
 }
 
-// 默认密码策略（平衡模式 - 降低门槛）
+// 默认密码策略（安全模式 - 要求字符多样性）
 var DefaultPasswordPolicy = PasswordPolicy{
 	MinLength:      8,
 	MaxLength:      64,
-	RequireUpper:   false,
-	RequireLower:   false,
-	RequireNumber:  false,
+	RequireUpper:   true,
+	RequireLower:   true,
+	RequireNumber:  true,
 	RequireSpecial: false,
-	ForbidUsername: false,
+	ForbidUsername: true,
 }
+
+// 邮箱验证正则（预编译，避免每次调用重新编译）
+var emailPattern = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
 // 常见弱密码列表（示例）
 var CommonPasswords = []string{
@@ -53,10 +57,10 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 
 	// 检查长度（硬性要求）
 	if len(password) < policy.MinLength {
-		return PasswordWeak, errors.New("密码至少8位")
+		return PasswordWeak, errors.New("validation.password.minLength")
 	}
 	if len(password) > policy.MaxLength {
-		return PasswordWeak, errors.New("密码最多64位")
+		return PasswordWeak, errors.New("validation.password.maxLength")
 	}
 
 	var (
@@ -70,13 +74,13 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 	// 检查字符类型
 	for _, char := range password {
 		switch {
-		case unicode.IsUpper(char):
+		case char >= 'A' && char <= 'Z':
 			hasUpper = true
-		case unicode.IsLower(char):
+		case char >= 'a' && char <= 'z':
 			hasLower = true
-		case unicode.IsNumber(char):
+		case char >= '0' && char <= '9':
 			hasNumber = true
-		case unicode.IsPunct(char) || unicode.IsSymbol(char):
+		default:
 			hasSpecial = true
 		}
 	}
@@ -107,16 +111,33 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 	// 只检查常见弱密码和明显安全问题
 	for _, common := range CommonPasswords {
 		if strings.EqualFold(password, common) {
-			return PasswordWeak, errors.New("密码过于简单，请使用更复杂的密码")
+			return PasswordWeak, errors.New("validation.password.tooWeak")
 		}
 	}
 
 	// 检查是否全是相同字符
 	if allSame(password) {
-		return PasswordWeak, errors.New("密码不能全是相同字符")
+		return PasswordWeak, errors.New("validation.password.sameChars")
 	}
 
-	// 计算强度等级（更宽松）
+	// 强制字符类型要求（根据策略）
+	if policy.RequireUpper && !hasUpper {
+		return PasswordWeak, errors.New("validation.password.requireUpper")
+	}
+	if policy.RequireLower && !hasLower {
+		return PasswordWeak, errors.New("validation.password.requireLower")
+	}
+	if policy.RequireNumber && !hasNumber {
+		return PasswordWeak, errors.New("validation.password.requireNumber")
+	}
+	if policy.RequireSpecial && !hasSpecial {
+		return PasswordWeak, errors.New("validation.password.requireSpecial")
+	}
+	if policy.ForbidUsername && username != "" && strings.Contains(strings.ToLower(password), strings.ToLower(username)) {
+		return PasswordWeak, errors.New("validation.password.containsUsername")
+	}
+
+	// 计算强度等级
 	var strength PasswordStrength
 	if score <= 2 {
 		strength = PasswordWeak
@@ -174,28 +195,28 @@ func ValidateUsername(username string) error {
 
 	// 检查长度
 	if len(username) < policy.MinLength {
-		return errors.New("用户名至少3位")
+		return errors.New("validation.username.minLength")
 	}
 	if len(username) > policy.MaxLength {
-		return errors.New("用户名最多32位")
+		return errors.New("validation.username.maxLength")
 	}
 
 	// 检查格式
 	if !policy.Pattern.MatchString(username) {
-		return errors.New("用户名只能包含字母、数字、下划线和连字符，且不能以 _ 或 - 开头或结尾")
+		return errors.New("validation.username.pattern")
 	}
 
 	// 检查保留用户名
 	lowerUsername := strings.ToLower(username)
 	for _, reserved := range policy.Reserved {
 		if lowerUsername == reserved {
-			return errors.New("该用户名不可使用")
+			return errors.New("validation.username.reserved")
 		}
 	}
 
 	// 检查连续特殊字符
 	if strings.Contains(username, "--") || strings.Contains(username, "__") {
-		return errors.New("用户名不能连续使用 _ 或 -")
+		return errors.New("validation.username.consecutive")
 	}
 
 	return nil
@@ -204,40 +225,39 @@ func ValidateUsername(username string) error {
 // ValidateEmail 验证邮箱格式（RFC 5322 简化版）
 func ValidateEmail(email string) error {
 	if email == "" {
-		return errors.New("邮箱不能为空")
+		return errors.New("validation.email.required")
 	}
 
-	// 基本格式验证
-	pattern := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
-	if !pattern.MatchString(email) {
-		return errors.New("邮箱格式不正确")
+	// 基本格式验证（使用预编译正则）
+	if !emailPattern.MatchString(email) {
+		return errors.New("validation.email.invalid")
 	}
 
 	// 检查长度
 	if len(email) > 254 {
-		return errors.New("邮箱地址过长")
+		return errors.New("validation.email.tooLong")
 	}
 
 	// 检查本地部分和域名部分
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
-		return errors.New("邮箱格式不正确")
+		return errors.New("validation.email.invalid")
 	}
 
 	local := parts[0]
 	domain := parts[1]
 
 	if len(local) == 0 || len(local) > 64 {
-		return errors.New("邮箱格式不正确")
+		return errors.New("validation.email.invalid")
 	}
 
 	if len(domain) < 3 || len(domain) > 255 {
-		return errors.New("邮箱域名不正确")
+		return errors.New("validation.email.invalid")
 	}
 
 	// 检查域名中是否有点
 	if !strings.Contains(domain, ".") {
-		return errors.New("邮箱域名不正确")
+		return errors.New("validation.email.invalid")
 	}
 
 	return nil
@@ -247,19 +267,64 @@ func ValidateEmail(email string) error {
 func IsDisposableEmail(email string) bool {
 	domain := strings.ToLower(strings.Split(email, "@")[1])
 
-	// 一次性邮箱黑名单（示例）
-	disposableDomains := []string{
-		"temp-mail.com", "guerrillamail.com", "10minutemail.com",
-		"mailinator.com", "throwaway.email", "fakeinbox.com",
-	}
-
-	for _, disposable := range disposableDomains {
-		if strings.HasSuffix(domain, disposable) {
+	for _, d := range disposableDomains {
+		if domain == d || strings.HasSuffix(domain, "."+d) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// disposableDomains 常见一次性邮箱域名黑名单
+var disposableDomains = []string{
+	// 10minutemail 系列
+	"10minutemail.com", "10minutemail.net", "10minutemail.info",
+	// guerrillamail 系列
+	"guerrillamail.com", "guerrillamail.info", "guerrillamail.net",
+	"guerrillamail.org", "guerrillamailblock.com", "grr.la",
+	"guerrillamail.de", "guerrillamailblock.com",
+	// tempmail 系列
+	"temp-mail.com", "temp-mail.org", "tempmail.com", "tempmail.org",
+	"tempmail.net", "tempmailaddress.com", "tempmailo.com",
+	// mailinator 系列
+	"mailinator.com", "mailinator.net", "mailinator.org",
+	"manybrain.com", "msgos.com", "notmailinator.com",
+	// mailnesia
+	"mailnesia.com", "mailnesia.net",
+	// yopmail 系列
+	"yopmail.com", "yopmail.fr", "yopmail.net", "yopmail.org",
+	"yopmail.com", "yopmail.gq", "yopmail.ml",
+	// trashmail 系列
+	"trashmail.com", "trashmail.net", "trashmail.org",
+	"trashmail.de", "trash-mail.com", "trashmail.ws",
+	// throwaway
+	"throwaway.email", "throwawaymail.com", "throwaway.emailaddress.org",
+	// 其他常见
+	"fakeinbox.com", "maildrop.cc", "maildrop.xyz",
+	"dispostable.com", "mailcatch.com", "mailexpire.com",
+	"mytemp.email", "mytempemail.com", "tempinbox.com",
+	"mailscrap.com", "mailinater.com", "messagebeamer.de",
+	"recyclemail.dk", "sharklasers.com", "spamavert.com",
+	"uggsrock.com", "mailnesia.com", "getairmail.com",
+	" guerrillamail.biz", "harakirimail.com", "meltmail.com",
+	"mintemail.com", "safetymail.info", "safetypost.de",
+	"spamfree24.org", "squizzy.de", "uggsrock.com",
+	"mailnull.com", "nomail.xl.cx", "throwam.com",
+	"tempail.com", "tempr.email", "disposableemailaddresses.emailmiser.com",
+	"mailmoat.com", "nomail2me.com", "throwawayemailaddress.com",
+	"ephemail.net", "emailisvalid.com", "mailexpire.com",
+	"jetable.org", "jetable.com", "mailforspam.com",
+	"s0ny.net", "safetymail.info", "filzmail.com",
+	"incognitomail.org", "incognitomail.com", "incognitomail.net",
+	"mailblocks.com", "mailme.lv", "mailshell.com",
+	"meltmail.com", "safetypost.de", "smapfree24.org",
+	"spamavert.com", "spammotel.com", "trashymail.com",
+	"mailexpire.com", "mintemail.com", "quickinbox.com",
+	"receiveee.com", "tmail.ws", "tempinbox.com",
+	"trashmail.io", "mohmal.com", "burpcollaborator.net",
+	"guerrillamailblock.com", "pokemail.net", "sharklasers.com",
+	"spam4.me", "trbvm.com", "txen.de", "yert.ye",
 }
 
 // GetPasswordStrengthText 获取密码强度文本
@@ -333,17 +398,63 @@ func GenerateUsernameFromEmail(email string) string {
 	return localPart
 }
 
-// RandomSuffix 生成指定长度的随机数字后缀
-func RandomSuffix(length int) string {
+// RandomSuffix 生成指定长度的随机数字后缀（使用 crypto/rand）
+func RandomSuffix(length int) (string, error) {
 	const digits = "0123456789"
 	result := make([]byte, length)
 	for i := range result {
-		result[i] = digits[rand.Intn(len(digits))]
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(digits))))
+		if err != nil {
+			return "", fmt.Errorf("crypto/rand failed: %w", err)
+		}
+		result[i] = digits[n.Int64()]
 	}
-	return string(result)
+	return string(result), nil
 }
 
 // isAlpha 检查字符是否为字母
 func isAlpha(c rune) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// SanitizeHTML 对字符串进行 HTML 实体转义，防止 XSS
+func SanitizeHTML(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	for _, c := range s {
+		switch c {
+		case '&':
+			b.WriteString("&amp;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '"':
+			b.WriteString("&quot;")
+		case '\'':
+			b.WriteString("&#x27;")
+		default:
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
+}
+
+// SanitizeInput 对用户输入进行消毒：去除首尾空白、控制字符，转义 HTML
+func SanitizeInput(s string) string {
+	// 去除首尾空白
+	s = strings.TrimSpace(s)
+	// 移除控制字符（保留换行和制表符）
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, c := range s {
+		if c == '\n' || c == '\t' || c == '\r' {
+			continue
+		}
+		if c < 32 {
+			continue
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }

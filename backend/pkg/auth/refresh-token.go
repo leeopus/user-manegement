@@ -8,75 +8,116 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/user-system/backend/internal/config"
 )
 
 const (
 	refreshTokenPrefix = "auth:refresh_token:"
 	userSessionsPrefix = "auth:user_sessions:"
-	maxSessionsPerUser = 5
 )
+
+func getMaxSessionsPerUser() int {
+	cfg := config.Get()
+	if cfg != nil && cfg.Security.MaxSessionsPerUser > 0 {
+		return cfg.Security.MaxSessionsPerUser
+	}
+	return 5
+}
+
+// ErrTokenNotFound 表示 token 在 Redis 中不存在（已过期或已撤销）
+var ErrTokenNotFound = fmt.Errorf("refresh token not found or expired")
 
 // RefreshTokenManager 管理服务端 refresh token 生命周期
 type RefreshTokenManager struct {
 	redis *redis.Client
 }
 
-// NewRefreshTokenManager 创建 refresh token 管理器
 func NewRefreshTokenManager(redisClient *redis.Client) *RefreshTokenManager {
 	return &RefreshTokenManager{redis: redisClient}
 }
 
-// tokenHash 对 token 做哈希，避免明文存储
-func tokenHash(token string) string {
+func (m *RefreshTokenManager) ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), redisOpTimeout)
+}
+
+func refreshTokenHash(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
 
-// Store 存储 refresh token，关联到用户（支持多设备）
+// storeScript 原子化存储 refresh token：SET token + ZADD session + 自动淘汰超限旧 token
+var storeScript = redis.NewScript(`
+	local tokenKey = KEYS[1]
+	local sessionsKey = KEYS[2]
+	local userID = ARGV[1]
+	local tokenTTL = tonumber(ARGV[2])
+	local sessionTTL = tonumber(ARGV[3])
+	local maxSessions = tonumber(ARGV[4])
+	local hash = ARGV[5]
+	local now = tonumber(ARGV[6])
+
+	redis.call("SET", tokenKey, userID, "EX", tokenTTL)
+
+	redis.call("ZADD", sessionsKey, now, hash)
+	redis.call("EXPIRE", sessionsKey, sessionTTL)
+
+	local count = redis.call("ZCARD", sessionsKey)
+	if count > maxSessions then
+		local excess = count - maxSessions
+		local oldest = redis.call("ZRANGE", sessionsKey, 0, excess - 1)
+		for _, old in ipairs(oldest) do
+			redis.call("DEL", KEYS[3] .. old)
+		end
+		redis.call("ZREMRANGEBYRANK", sessionsKey, 0, excess - 1)
+	end
+
+	return 1
+`)
+
+// Store 存储 refresh token，使用 Lua 脚本保证原子性
 func (m *RefreshTokenManager) Store(userID uint, token string, ttl time.Duration) error {
 	if m.redis == nil {
 		return nil
 	}
 
-	ctx := context.Background()
-	hash := tokenHash(token)
+	ctx, cancel := m.ctx()
+	defer cancel()
+
+	hash := refreshTokenHash(token)
 	tokenKey := fmt.Sprintf("%s%s", refreshTokenPrefix, hash)
 	sessionsKey := fmt.Sprintf("%s%d", userSessionsPrefix, userID)
 
-	// 1. 存储token到用户会话集合
-	m.redis.SAdd(ctx, sessionsKey, hash)
-	m.redis.Expire(ctx, sessionsKey, 30*24*time.Hour) // 最长30天
+	_, err := storeScript.Run(ctx, m.redis,
+		[]string{tokenKey, sessionsKey, refreshTokenPrefix},
+		fmt.Sprintf("%d", userID),
+		int64(ttl.Seconds()),
+		int64(30*24*time.Hour.Seconds()),
+		getMaxSessionsPerUser(),
+		hash,
+		float64(time.Now().UnixNano()),
+	).Result()
 
-	// 限制每用户最多 maxSessionsPerUser 个会话
-	count := m.redis.SCard(ctx, sessionsKey).Val()
-	if count > int64(maxSessionsPerUser) {
-		// 移除最早的一个（FIFO）
-		members := m.redis.SPopN(ctx, sessionsKey, count-int64(maxSessionsPerUser)).Val()
-		for _, old := range members {
-			m.redis.Del(ctx, fmt.Sprintf("%s%s", refreshTokenPrefix, old))
-		}
-	}
-
-	// 2. 存储token详情（用于校验）
-	return m.redis.Set(ctx, tokenKey, fmt.Sprintf("%d", userID), ttl).Err()
+	return err
 }
 
-// Validate 校验 refresh token 是否有效
+// Validate 校验 refresh token 是否有效，区分 Redis 不可用、token 不存在和 token 过期
 func (m *RefreshTokenManager) Validate(token string) (uint, error) {
 	if m.redis == nil {
-		return 0, nil // Redis 不可用时跳过校验
+		return 0, fmt.Errorf("refresh token store unavailable")
 	}
 
-	ctx := context.Background()
-	hash := tokenHash(token)
+	ctx, cancel := m.ctx()
+	defer cancel()
+
+	hash := refreshTokenHash(token)
 	tokenKey := fmt.Sprintf("%s%s", refreshTokenPrefix, hash)
 
 	val, err := m.redis.Get(ctx, tokenKey).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return 0, fmt.Errorf("refresh token not found or revoked")
+			return 0, ErrTokenNotFound
 		}
-		return 0, err
+		return 0, fmt.Errorf("refresh token store error: %w", err)
 	}
 
 	var userID uint
@@ -90,13 +131,15 @@ func (m *RefreshTokenManager) Revoke(userID uint, token string) error {
 		return nil
 	}
 
-	ctx := context.Background()
-	hash := tokenHash(token)
+	ctx, cancel := m.ctx()
+	defer cancel()
+
+	hash := refreshTokenHash(token)
 	tokenKey := fmt.Sprintf("%s%s", refreshTokenPrefix, hash)
 	sessionsKey := fmt.Sprintf("%s%d", userSessionsPrefix, userID)
 
 	m.redis.Del(ctx, tokenKey)
-	m.redis.SRem(ctx, sessionsKey, hash)
+	m.redis.ZRem(ctx, sessionsKey, hash)
 	return nil
 }
 
@@ -106,11 +149,12 @@ func (m *RefreshTokenManager) RevokeAll(userID uint) error {
 		return nil
 	}
 
-	ctx := context.Background()
+	ctx, cancel := m.ctx()
+	defer cancel()
+
 	sessionsKey := fmt.Sprintf("%s%d", userSessionsPrefix, userID)
 
-	// 获取所有 session token hash
-	members := m.redis.SMembers(ctx, sessionsKey).Val()
+	members := m.redis.ZRange(ctx, sessionsKey, 0, -1).Val()
 	for _, hash := range members {
 		m.redis.Del(ctx, fmt.Sprintf("%s%s", refreshTokenPrefix, hash))
 	}

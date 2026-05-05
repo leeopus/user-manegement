@@ -7,11 +7,77 @@ import {
   User,
 } from './types'
 import { APIException } from './errors'
-import { getCSRFToken, addCSRFToHeaders } from './csrf'
+import { addCSRFToHeaders } from './csrf'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
 
 const CSRF_REQUIRED_METHODS = ['POST', 'PUT', 'DELETE', 'PATCH']
+const REQUEST_TIMEOUT_MS = 30000
+
+// Token 刷新锁，防止并发刷新
+let isRefreshing = false
+let refreshPromise: Promise<boolean> | null = null
+let lastRefreshAttempt = 0
+const REFRESH_COOLDOWN_MS = 5000
+
+// 跨标签页同步：当一个标签页刷新 token 后，通知其他标签页重新获取用户信息
+const authChannel = typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('auth_sync')
+  : null
+
+if (authChannel) {
+  authChannel.onmessage = (event: MessageEvent) => {
+    if (event.data?.type === 'TOKEN_REFRESHED') {
+      // 另一个标签页完成了 token 刷新，本标签页的 cookie 已更新
+      // 重置刷新状态以便本标签页后续请求正常
+      isRefreshing = false
+      refreshPromise = null
+    } else if (event.data?.type === 'LOGOUT') {
+      // 另一个标签页登出，本标签页也需要清除状态
+      isRefreshing = false
+      refreshPromise = null
+    }
+  }
+}
+
+async function refreshAccessToken(): Promise<boolean> {
+  const now = Date.now()
+  if (now - lastRefreshAttempt < REFRESH_COOLDOWN_MS) {
+    return false
+  }
+
+  if (isRefreshing && refreshPromise) {
+    return refreshPromise
+  }
+
+  isRefreshing = true
+  lastRefreshAttempt = now
+  refreshPromise = (async () => {
+    try {
+      const baseURL = API_BASE
+      const url = baseURL ? `${baseURL}/api/v1/auth/refresh` : '/api/v1/auth/refresh'
+
+      const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      const data = await response.json()
+      if (data.success === true) {
+        authChannel?.postMessage({ type: 'TOKEN_REFRESHED' })
+      }
+      return data.success === true
+    } catch {
+      return false
+    } finally {
+      isRefreshing = false
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
 
 class APIClient {
   private baseURL: string
@@ -29,17 +95,23 @@ class APIClient {
     options?: RequestInit
   ): Promise<APIResponse<T>> {
     let url = this.getUrl(path)
+
+    // 创建 AbortController 用于请求超时
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
     let headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...((options?.headers as Record<string, string>) || {}),
     }
 
-    // 对于需要 CSRF 的方法，添加 token
+    // 对于需要 CSRF 的方法，获取新 token 并添加
     if (options?.method && CSRF_REQUIRED_METHODS.includes(options.method)) {
       try {
         headers = (await addCSRFToHeaders(headers)) as Record<string, string>
       } catch (error) {
-        console.error('Failed to add CSRF token:', error)
+        // CSRF token 获取失败，明确抛出错误，不静默降级
+        throw new Error('CSRF_TOKEN_UNAVAILABLE: Failed to obtain CSRF token. Please refresh the page and try again.')
       }
     }
 
@@ -48,32 +120,67 @@ class APIClient {
         ...options,
         headers,
         credentials: 'include',
+        signal: controller.signal,
       })
+
+      // 防止非 JSON 响应（如 502/504 HTML 错误页）导致 JSON 解析失败
+      const contentType = response.headers.get('content-type') || ''
+      if (!contentType.includes('application/json')) {
+        throw new Error(`NETWORK_ERROR: Server returned non-JSON response (HTTP ${response.status})`)
+      }
 
       const data: APIResponse<T> = await response.json()
 
-      // CSRF token 过期，清除缓存并重试一次
-      if (!data.success && data.error?.code === 'CSRF_TOKEN_INVALID_403') {
-        const { clearCSRFToken } = await import('./csrf')
-        clearCSRFToken()
+      // 401 且不是刷新请求本身 → 尝试刷新 token 并重试一次
+      if (!data.success && data.error?.code === 'UNAUTHORIZED_401' && !path.includes('/auth/refresh')) {
+        const refreshed = await refreshAccessToken()
+        if (refreshed) {
+          // 重试时重新获取 CSRF token（原 token 已被一次性消耗）
+          let retryHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+          }
 
-        headers = (await addCSRFToHeaders({
-          'Content-Type': 'application/json',
-          ...((options?.headers as Record<string, string>) || {}),
-        })) as Record<string, string>
+          if (options?.method && CSRF_REQUIRED_METHODS.includes(options.method)) {
+            try {
+              retryHeaders = (await addCSRFToHeaders(retryHeaders)) as Record<string, string>
+            } catch {
+              // CSRF 获取失败时，不重试写操作，直接返回 401 错误让用户重新登录
+              return data
+            }
+          }
 
-        const retryResponse = await fetch(url, {
-          ...options,
-          headers,
-          credentials: 'include',
-        })
+          try {
+            const retryResponse = await fetch(url, {
+              ...options,
+              headers: retryHeaders,
+              credentials: 'include',
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            })
 
-        return await retryResponse.json()
+            const retryContentType = retryResponse.headers.get('content-type') || ''
+            if (!retryContentType.includes('application/json')) {
+              return data
+            }
+
+            return await retryResponse.json()
+          } catch {
+            // 重试网络错误时返回原始 401 错误
+            return data
+          }
+        }
       }
 
       return data
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith('CSRF_TOKEN_UNAVAILABLE')) {
+        throw error
+      }
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('REQUEST_TIMEOUT: Request timed out. Please try again.')
+      }
       throw new Error(`NETWORK_ERROR: ${error}`)
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 
@@ -103,10 +210,7 @@ class APIClient {
     return response.data
   }
 
-  /**
-   * 获取当前用户信息（token 通过 httpOnly cookie 自动携带）
-   */
-  async getUserInfo(_token?: string): Promise<User> {
+  async getUserInfo(): Promise<User> {
     const response = await this.request<User>('/api/v1/auth/me', {})
 
     if (!response.success || !response.data) {
@@ -116,10 +220,7 @@ class APIClient {
     return response.data
   }
 
-  /**
-   * 刷新令牌（refresh token 通过 httpOnly cookie 自动携带）
-   */
-  async refreshToken(_refreshToken?: string): Promise<{ user: User }> {
+  async refreshToken(): Promise<{ user: User }> {
     const response = await this.request<{ user: User }>('/api/v1/auth/refresh', {
       method: 'POST',
     })
@@ -131,10 +232,7 @@ class APIClient {
     return response.data
   }
 
-  /**
-   * 登出（token 通过 httpOnly cookie 自动携带）
-   */
-  async logout(_token?: string): Promise<void> {
+  async logout(): Promise<void> {
     const response = await this.request<void>('/api/v1/auth/logout', {
       method: 'POST',
     })
@@ -142,6 +240,8 @@ class APIClient {
     if (!response.success) {
       throw APIException.fromAPIError(response.error!)
     }
+
+    authChannel?.postMessage({ type: 'LOGOUT' })
   }
 
   async requestPasswordReset(email: string): Promise<void> {
@@ -156,43 +256,40 @@ class APIClient {
   }
 
   async resetPassword(token: string, newPassword: string): Promise<void> {
-    let url = this.getUrl('/api/v1/auth/password/reset')
-
-    const response = await fetch(url, {
+    const response = await this.request<void>('/api/v1/auth/password/reset', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
       body: JSON.stringify({ token, new_password: newPassword }),
     })
 
-    const data: APIResponse<void> = await response.json()
-
-    if (!data.success) {
-      throw APIException.fromAPIError(data.error!)
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
     }
   }
 
   async validateResetToken(token: string): Promise<{ valid: boolean }> {
-    let url = this.getUrl('/api/v1/auth/password/validate-token')
-
-    const response = await fetch(url, {
+    const response = await this.request<{ valid: boolean }>('/api/v1/auth/password/validate-token', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
       body: JSON.stringify({ token }),
     })
 
-    const data: APIResponse<{ valid: boolean }> = await response.json()
-
-    if (!data.success || !data.data) {
-      throw APIException.fromAPIError(data.error!)
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
     }
 
-    return data.data
+    return response.data
+  }
+
+  async listUsers(page = 1, pageSize = 10): Promise<{ users: User[]; total: number }> {
+    const response = await this.request<{ users: User[]; total: number }>(
+      `/api/v1/users?page=${page}&page_size=${pageSize}`,
+      {}
+    )
+
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+
+    return response.data
   }
 }
 

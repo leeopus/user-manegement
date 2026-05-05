@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
 	"github.com/user-system/backend/pkg/response"
 )
@@ -33,17 +34,21 @@ type CreatePermissionRequest struct {
 }
 
 func (h *permissionHandler) ListPermissions(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	page, pageSize, offset := response.ParsePagination(c)
 
-	permissions, total, err := h.permissionService.ListPermissions(page, pageSize)
+	permissions, total, err := h.permissionService.ListPermissions(offset, pageSize)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
+	permResponses := make([]dto.PermissionResponse, len(permissions))
+	for i := range permissions {
+		permResponses[i] = dto.ToPermissionResponse(&permissions[i])
+	}
+
 	response.Success(c, gin.H{
-		"permissions": permissions,
+		"permissions": permResponses,
 		"total":       total,
 		"page":        page,
 		"page_size":   pageSize,
@@ -63,7 +68,7 @@ func (h *permissionHandler) GetPermission(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, permission)
+	response.Success(c, dto.ToPermissionResponse(permission))
 }
 
 func (h *permissionHandler) CreatePermission(c *gin.Context) {
@@ -73,13 +78,15 @@ func (h *permissionHandler) CreatePermission(c *gin.Context) {
 		return
 	}
 
-	permission, err := h.permissionService.CreatePermission(req.Name, req.Code, req.Resource, req.Action, req.Description)
+	permission, err := h.permissionService.CreatePermission(
+		req.Name, req.Code, req.Resource, req.Action, req.Description, getAuditContext(c),
+	)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Success(c, permission)
+	response.Created(c, dto.ToPermissionResponse(permission))
 }
 
 func (h *permissionHandler) UpdatePermission(c *gin.Context) {
@@ -95,13 +102,15 @@ func (h *permissionHandler) UpdatePermission(c *gin.Context) {
 		return
 	}
 
-	permission, err := h.permissionService.UpdatePermission(uint(id), req.Name, req.Code, req.Resource, req.Action, req.Description)
+	permission, err := h.permissionService.UpdatePermission(
+		uint(id), req.Name, req.Code, req.Resource, req.Action, req.Description, getAuditContext(c),
+	)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Success(c, permission)
+	response.Success(c, dto.ToPermissionResponse(permission))
 }
 
 func (h *permissionHandler) DeletePermission(c *gin.Context) {
@@ -111,7 +120,7 @@ func (h *permissionHandler) DeletePermission(c *gin.Context) {
 		return
 	}
 
-	if err := h.permissionService.DeletePermission(uint(id)); err != nil {
+	if err := h.permissionService.DeletePermission(uint(id), getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}

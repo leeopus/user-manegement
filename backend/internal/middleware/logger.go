@@ -18,7 +18,7 @@ func Logger() gin.HandlerFunc {
 		end := time.Now()
 		latency := end.Sub(start)
 
-		zap.L().Info("HTTP Request",
+		fields := []zap.Field{
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
 			zap.String("query", query),
@@ -26,6 +26,13 @@ func Logger() gin.HandlerFunc {
 			zap.Duration("latency", latency),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user_agent", c.Request.UserAgent()),
-		)
+		}
+
+		// 添加 request_id
+		if requestID, ok := c.Get("request_id"); ok {
+			fields = append(fields, zap.String("request_id", requestID.(string)))
+		}
+
+		zap.L().Info("HTTP Request", fields...)
 	}
 }

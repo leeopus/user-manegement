@@ -2,19 +2,21 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/pkg/csrf"
 )
 
 const (
-	csrfHeader    = "X-CSRF-Token"
-	csrfQueryParam = "csrf_token"
+	csrfHeader = "X-CSRF-Token"
 )
 
-// CSRF 中间件 - 验证 CSRF token
-func CSRF() gin.HandlerFunc {
+// CSRF 创建 CSRF 验证中间件（绑定 session，一次性 token）
+func CSRF(redisClient *redis.Client) gin.HandlerFunc {
+	csrfMgr := csrf.NewCSRFManager(redisClient)
+
 	return func(c *gin.Context) {
 		// 对于安全的方法（GET, HEAD, OPTIONS），跳过检查
 		if c.Request.Method == "GET" || c.Request.Method == "HEAD" || c.Request.Method == "OPTIONS" {
@@ -22,17 +24,14 @@ func CSRF() gin.HandlerFunc {
 			return
 		}
 
-		// 获取 token
+		// 仅从 header 获取 token（不使用 query param，防止 URL 泄漏）
 		token := c.GetHeader(csrfHeader)
-		if token == "" {
-			token = c.PostForm(csrfQueryParam)
-		}
-		if token == "" {
-			token = c.Query(csrfQueryParam)
-		}
 
-		// 验证 token
-		if err := csrf.DefaultManager.ValidateToken(token); err != nil {
+		// 获取当前 session 指纹用于验证绑定
+		sessionID := dto.SessionFingerprint(c)
+
+		// 验证 token（验证后自动删除，实现一次性使用）
+		if err := csrfMgr.ValidateToken(token, sessionID); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"error": gin.H{
@@ -48,18 +47,5 @@ func CSRF() gin.HandlerFunc {
 		}
 
 		c.Next()
-	}
-}
-
-// CSRFExempt 排除某些路由的 CSRF 检查
-func CSRFExempt(paths ...string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		for _, path := range paths {
-			if strings.HasPrefix(c.Request.URL.Path, path) {
-				c.Next()
-				return
-			}
-		}
-		CSRF()(c)
 	}
 }

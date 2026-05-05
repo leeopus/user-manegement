@@ -4,8 +4,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
-	apperrors "github.com/user-system/backend/pkg/errors"
 	"github.com/user-system/backend/pkg/response"
 )
 
@@ -36,29 +36,23 @@ type UpdateUserRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 }
 
+func getAuditContext(c *gin.Context) dto.AuditContext {
+	userIDVal, _ := c.Get("user_id")
+	userID, _ := userIDVal.(uint)
+	return dto.NewAuditContext(c, userID)
+}
+
 func (h *userHandler) ListUsers(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	page, pageSize, offset := response.ParsePagination(c)
 
-	// 分页安全限制
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 10
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-
-	users, total, err := h.userService.ListUsers(page, pageSize)
+	users, total, err := h.userService.ListUsers(offset, pageSize)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
 	response.Success(c, gin.H{
-		"users":     users,
+		"users":     dto.ToUserResponseList(users),
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,
@@ -78,7 +72,7 @@ func (h *userHandler) GetUser(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, user)
+	response.Success(c, dto.ToUserResponse(user))
 }
 
 func (h *userHandler) CreateUser(c *gin.Context) {
@@ -88,13 +82,13 @@ func (h *userHandler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.CreateUser(req.Username, req.Email, req.Password)
+	user, err := h.userService.CreateUser(req.Username, req.Email, req.Password, getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Created(c, user)
+	response.Created(c, dto.ToUserResponse(user))
 }
 
 func (h *userHandler) UpdateUser(c *gin.Context) {
@@ -110,13 +104,13 @@ func (h *userHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.UpdateUser(uint(id), req.Username, req.Email)
+	user, err := h.userService.UpdateUser(uint(id), req.Username, req.Email, getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Success(c, user)
+	response.Success(c, dto.ToUserResponse(user))
 }
 
 func (h *userHandler) DeleteUser(c *gin.Context) {
@@ -126,7 +120,14 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.DeleteUser(uint(id)); err != nil {
+	currentUserIDVal, _ := c.Get("user_id")
+	currentUserID, ok := currentUserIDVal.(uint)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
+
+	if err := h.userService.DeleteUser(uint(id), currentUserID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -134,47 +135,4 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 	response.Success(c, gin.H{
 		"message": "user deleted successfully",
 	})
-}
-
-// requiresAdmin 是一个辅助函数，检查用户是否是管理员
-func requiresAdmin(c *gin.Context) bool {
-	roles, exists := c.Get("user_roles")
-	if !exists {
-		return false
-	}
-
-	userRoles, ok := roles.([]interface{})
-	if !ok {
-		return false
-	}
-
-	for _, role := range userRoles {
-		if r, ok := role.(map[string]interface{}); ok {
-			if code, ok := r["code"].(string); ok && code == "admin" {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// ensureAdminOrSelf 确保用户是管理员或正在操作自己的资源
-func ensureAdminOrSelf(c *gin.Context, targetUserID uint) bool {
-	if requiresAdmin(c) {
-		return true
-	}
-
-	userID, _ := c.Get("user_id")
-	return userID.(uint) == targetUserID
-}
-
-// ErrorResponse 返回一个标准错误响应
-func ErrorResponse(c *gin.Context, err error) {
-	appErr, ok := apperrors.IsAppError(err)
-	if ok {
-		response.Error(c, appErr)
-	} else {
-		response.Error(c, apperrors.ErrInternalServer)
-	}
 }

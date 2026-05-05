@@ -4,11 +4,20 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
 	"github.com/user-system/backend/pkg/jwt"
 	"github.com/user-system/backend/pkg/response"
 	apperrors "github.com/user-system/backend/pkg/errors"
 )
+
+// isSilentRegisterError 判断是否为防止邮箱枚举的静默成功错误
+func isSilentRegisterError(err error) bool {
+	if appErr, ok := apperrors.IsAppError(err); ok {
+		return appErr.Code == "AUTH_REGISTER_SILENT_200"
+	}
+	return false
+}
 
 type AuthHandler interface {
 	Register(c *gin.Context)
@@ -48,17 +57,24 @@ func (h *authHandler) Register(c *gin.Context) {
 		return
 	}
 
-	clientIP := c.ClientIP()
-	userAgent := c.GetHeader("User-Agent")
+	auditCtx := dto.NewAuditContext(c, 0)
 
-	user, err := h.authService.Register(req.Email, req.Password, clientIP, userAgent)
+	user, err := h.authService.Register(req.Email, req.Password, auditCtx)
 	if err != nil {
+		// 防止邮箱枚举：静默成功时返回与正常注册相同的响应结构
+		if isSilentRegisterError(err) {
+			response.Created(c, gin.H{
+				"message": "registration_processed",
+				"user":    nil,
+			})
+			return
+		}
 		response.Error(c, err)
 		return
 	}
 
 	response.Created(c, gin.H{
-		"user": user,
+		"user": dto.ToUserResponse(user),
 	})
 }
 
@@ -69,13 +85,12 @@ func (h *authHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, accessToken, refreshToken, err := h.authService.Login(req.Email, req.Password)
+	user, accessToken, refreshToken, err := h.authService.Login(req.Email, req.Password, c.ClientIP(), req.RememberMe)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	// 根据"记住我"设置不同的cookie过期时间
 	if req.RememberMe {
 		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, 7*24*time.Hour)
 		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, 30*24*time.Hour)
@@ -85,17 +100,26 @@ func (h *authHandler) Login(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"user": user,
+		"user": dto.ToUserWithRolesResponse(user),
 	})
 }
 
 func (h *authHandler) Logout(c *gin.Context) {
-	userID, _ := c.Get("user_id")
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		response.Unauthorized(c)
+		return
+	}
+	userID, ok := userIDVal.(uint)
+	if !ok {
+		response.Error(c, apperrors.ErrInternalServer)
+		return
+	}
 
-	// 从 cookie 获取 refresh token 用于撤销
 	refreshToken, _ := jwt.GetTokenCookie(c, jwt.RefreshTokenCookie)
+	accessToken, _ := jwt.GetTokenCookie(c, jwt.AccessTokenCookie)
 
-	_ = h.authService.Logout(userID.(uint), refreshToken)
+	_ = h.authService.Logout(userID, refreshToken, accessToken)
 
 	jwt.ClearAllTokenCookies(c)
 
@@ -111,27 +135,39 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	user, newToken, err := h.authService.RefreshToken(refreshToken)
+	user, newAccessToken, newRefreshToken, rememberMe, err := h.authService.RefreshToken(refreshToken)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newToken, 15*time.Minute)
+	// 根据 RememberMe 状态设置与登录时一致的 cookie 时长
+	if rememberMe {
+		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 7*24*time.Hour)
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, 30*24*time.Hour)
+	} else {
+		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 15*time.Minute)
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, 7*24*time.Hour)
+	}
 
 	response.Success(c, gin.H{
-		"user": user,
+		"user": dto.ToUserResponse(user),
 	})
 }
 
 func (h *authHandler) GetCurrentUser(c *gin.Context) {
-	userID, _ := c.Get("user_id")
+	userIDVal, _ := c.Get("user_id")
+	userID, ok := userIDVal.(uint)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
 
-	user, err := h.authService.GetCurrentUser(userID.(uint))
+	user, err := h.authService.GetCurrentUser(userID)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Success(c, user)
+	response.Success(c, dto.ToUserWithRolesResponse(user))
 }

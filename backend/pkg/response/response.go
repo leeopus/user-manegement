@@ -2,10 +2,35 @@ package response
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	apperrors "github.com/user-system/backend/pkg/errors"
 )
+
+// Pagination 分页参数
+type Pagination struct {
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+}
+
+// ParsePagination 从请求中解析分页参数，返回标准化后的 page、pageSize、offset
+func ParsePagination(c *gin.Context) (page, pageSize, offset int) {
+	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	offset = (page - 1) * pageSize
+	return
+}
 
 // ErrorDetail 错误详情
 type ErrorDetail struct {

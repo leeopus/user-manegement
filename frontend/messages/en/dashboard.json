@@ -1,6 +1,8 @@
 {
   "title": "Admin Dashboard",
   "welcome": "Welcome, ",
+  "loading": "Loading...",
+  "logout": "Logout",
   "home": "Home",
   "users": "Users",
   "roles": "Roles",

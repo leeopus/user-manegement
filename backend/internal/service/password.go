@@ -4,13 +4,16 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/email"
 	"github.com/user-system/backend/internal/repository"
+	"github.com/user-system/backend/pkg/auth"
 	apperrors "github.com/user-system/backend/pkg/errors"
 	"github.com/user-system/backend/pkg/utils"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // PasswordResetService 密码重置服务
@@ -21,32 +24,40 @@ type PasswordResetService interface {
 }
 
 type passwordResetService struct {
-	userRepo       repository.UserRepository
-	tokenRepo      repository.PasswordResetTokenRepository
-	auditLogRepo   repository.AuditLogRepository
-	emailService   email.EmailService
-	tokenGenerator func() (string, error)
-	frontendURL    string
+	userRepo            repository.UserRepository
+	tokenRepo           repository.PasswordResetTokenRepository
+	passwordHistoryRepo repository.PasswordHistoryRepository
+	auditLogger         *AuditLogger
+	emailService        email.EmailService
+	tokenGenerator      func() (string, error)
+	frontendURL         string
+	refreshTokenMgr     *auth.RefreshTokenManager
+	blacklistMgr        *auth.TokenBlacklistManager
 }
 
 func NewPasswordResetService(
 	userRepo repository.UserRepository,
 	tokenRepo repository.PasswordResetTokenRepository,
-	auditLogRepo repository.AuditLogRepository,
+	passwordHistoryRepo repository.PasswordHistoryRepository,
+	auditLogger *AuditLogger,
 	emailService email.EmailService,
 	frontendURL string,
+	refreshTokenMgr *auth.RefreshTokenManager,
+	blacklistMgr *auth.TokenBlacklistManager,
 ) PasswordResetService {
 	return &passwordResetService{
-		userRepo:       userRepo,
-		tokenRepo:      tokenRepo,
-		auditLogRepo:   auditLogRepo,
-		emailService:   emailService,
-		tokenGenerator: generateSecureToken,
-		frontendURL:    frontendURL,
+		userRepo:            userRepo,
+		tokenRepo:           tokenRepo,
+		passwordHistoryRepo: passwordHistoryRepo,
+		auditLogger:         auditLogger,
+		emailService:        emailService,
+		tokenGenerator:      generateSecureToken,
+		frontendURL:         frontendURL,
+		refreshTokenMgr:     refreshTokenMgr,
+		blacklistMgr:        blacklistMgr,
 	}
 }
 
-// generateSecureToken 生成安全的随机令牌
 func generateSecureToken() (string, error) {
 	tokenBytes := make([]byte, 32)
 	_, err := rand.Read(tokenBytes)
@@ -56,11 +67,15 @@ func generateSecureToken() (string, error) {
 	return base64.URLEncoding.EncodeToString(tokenBytes), nil
 }
 
-// RequestPasswordReset 请求密码重置
-func (s *passwordResetService) RequestPasswordReset(email string) error {
-	user, err := s.userRepo.FindByEmail(email)
+// RequestPasswordReset 请求密码重置（常量时间响应，防止时序侧信道枚举邮箱）
+func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
+	user, err := s.userRepo.FindByEmail(emailAddr)
+
+	// 无论邮箱是否存在，都执行等量工作（hash + 随机生成）保持时间一致
+	dummyToken, _ := generateSecureToken()
+	_ = repository.HashResetToken(dummyToken)
+
 	if err != nil {
-		// 不透露用户是否存在，返回成功
 		return nil
 	}
 
@@ -70,41 +85,35 @@ func (s *passwordResetService) RequestPasswordReset(email string) error {
 	}
 
 	resetToken := &repository.PasswordResetToken{
-		Email:     email,
-		Token:     token,
-		ExpiresAt: time.Now().Add(1 * time.Hour),
+		Email:     emailAddr,
+		TokenHash: repository.HashResetToken(token),
+		ExpiresAt: time.Now().Add(15 * time.Minute),
 		Used:      false,
 		UserID:    user.ID,
 	}
 
 	if err := s.tokenRepo.Create(resetToken); err != nil {
-		log.Printf("ERROR: Failed to save reset token: %v", err)
+		zap.L().Error("Failed to save reset token", zap.Error(err))
 		return apperrors.ErrInternalServer
 	}
 
 	resetLink := fmt.Sprintf("%s/reset-password?token=%s", s.frontendURL, token)
 
-	if err := s.emailService.SendPasswordResetEmail(email, resetLink); err != nil {
-		log.Printf("ERROR: Failed to send reset email: %v", err)
+	if err := s.emailService.SendPasswordResetEmail(emailAddr, resetLink); err != nil {
+		zap.L().Error("Failed to send reset email", zap.Error(err))
 		return apperrors.ErrInternalServer
 	}
 
-	auditLog := &repository.AuditLog{
-		UserID:   user.ID,
-		Action:   "password_reset_requested",
-		Resource: "user",
-		Details:  "Password reset requested via email",
-	}
-	if err := s.auditLogRepo.Create(auditLog); err != nil {
-		log.Printf("WARN: Failed to create audit log: %v", err)
-	}
+	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID}, "password_reset_requested", "user", map[string]interface{}{
+		"email": emailAddr,
+	})
 
 	return nil
 }
 
-// ValidateResetToken 验证重置令牌
 func (s *passwordResetService) ValidateResetToken(token string) (bool, error) {
-	resetToken, err := s.tokenRepo.FindByToken(token)
+	tokenHash := repository.HashResetToken(token)
+	resetToken, err := s.tokenRepo.FindByTokenHash(tokenHash)
 	if err != nil {
 		return false, nil
 	}
@@ -120,62 +129,95 @@ func (s *passwordResetService) ValidateResetToken(token string) (bool, error) {
 	return true, nil
 }
 
-// ResetPassword 重置密码
+// ResetPassword 重置密码（事务保护防止竞态）
 func (s *passwordResetService) ResetPassword(token, newPassword string) error {
-	resetToken, err := s.tokenRepo.FindByToken(token)
-	if err != nil {
-		return apperrors.ErrInvalidResetToken
-	}
+	tokenHash := repository.HashResetToken(token)
 
-	if resetToken.Used {
-		return apperrors.ErrResetTokenAlreadyUsed
-	}
+	txErr := s.tokenRepo.Transaction(func(tx *gorm.DB) error {
+		resetToken, err := s.tokenRepo.FindByTokenHashForUpdate(tx, tokenHash)
+		if err != nil {
+			return apperrors.ErrInvalidResetToken
+		}
 
-	if time.Now().After(resetToken.ExpiresAt) {
-		return apperrors.ErrResetTokenExpired
-	}
+		if resetToken.Used {
+			return apperrors.ErrResetTokenAlreadyUsed
+		}
 
-	user, err := s.userRepo.FindByEmail(resetToken.Email)
-	if err != nil {
-		return apperrors.ErrUserNotFound
-	}
+		if time.Now().After(resetToken.ExpiresAt) {
+			return apperrors.ErrResetTokenExpired
+		}
 
-	// 使用与注册相同的密码验证规则
-	if _, err := utils.ValidatePassword(newPassword, user.Username); err != nil {
-		return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
-			"reason": err.Error(),
+		if err := s.tokenRepo.MarkAsUsedByHash(tx, tokenHash); err != nil {
+			return apperrors.ErrInternalServer
+		}
+
+		user, err := s.userRepo.FindByEmail(resetToken.Email)
+		if err != nil {
+			return apperrors.ErrUserNotFound
+		}
+
+		if _, err := utils.ValidatePassword(newPassword, user.Username); err != nil {
+			return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+				"reason": err.Error(),
+			})
+		}
+
+		if utils.CheckPassword(newPassword, user.PasswordHash) {
+			return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+				"reason": "new password must be different from current password",
+			})
+		}
+
+		// 检查密码历史（最近5次）
+		histories, _ := s.passwordHistoryRepo.FindByUserID(user.ID, 5)
+		for _, h := range histories {
+			if utils.CheckPassword(newPassword, h.PasswordHash) {
+				return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+					"reason": "new password was used recently, please choose a different one",
+				})
+			}
+		}
+
+		hashedPassword, err := utils.HashPassword(newPassword)
+		if err != nil {
+			zap.L().Error("Failed to hash password", zap.Error(err))
+			return apperrors.ErrInternalServer
+		}
+
+		user.PasswordHash = hashedPassword
+		if err := tx.Save(user).Error; err != nil {
+			return apperrors.ErrInternalServer
+		}
+
+		// 记录密码历史
+		_ = s.passwordHistoryRepo.Create(&repository.PasswordHistory{
+			UserID:       user.ID,
+			PasswordHash: hashedPassword,
 		})
-	}
 
-	// 使用与注册相同的密码加密方法
-	hashedPassword, err := utils.HashPassword(newPassword)
-	if err != nil {
-		log.Printf("ERROR: Failed to hash password: %v", err)
+		return nil
+	})
+
+	if txErr != nil {
+		if appErr, ok := apperrors.IsAppError(txErr); ok {
+			return appErr
+		}
 		return apperrors.ErrInternalServer
 	}
 
-	user.PasswordHash = hashedPassword
-	if err := s.userRepo.Update(user); err != nil {
-		log.Printf("ERROR: Failed to update password: %v", err)
-		return apperrors.ErrInternalServer
-	}
-
-	if err := s.tokenRepo.MarkAsUsed(token); err != nil {
-		log.Printf("WARN: Failed to mark token as used: %v", err)
-	}
-
-	if err := s.emailService.SendPasswordChangedNotification(user.Email); err != nil {
-		log.Printf("WARN: Failed to send password change notification: %v", err)
-	}
-
-	auditLog := &repository.AuditLog{
-		UserID:   user.ID,
-		Action:   "password_reset_completed",
-		Resource: "user",
-		Details:  "Password reset via email link",
-	}
-	if err := s.auditLogRepo.Create(auditLog); err != nil {
-		log.Printf("WARN: Failed to create audit log: %v", err)
+	// 事务成功后执行副作用操作
+	resetToken, _ := s.tokenRepo.FindByTokenHash(tokenHash)
+	if resetToken != nil {
+		user, _ := s.userRepo.FindByEmail(resetToken.Email)
+		if user != nil {
+			_ = s.refreshTokenMgr.RevokeAll(user.ID)
+			_ = s.blacklistMgr.RevokeAllUserTokens(user.ID)
+			_ = s.emailService.SendPasswordChangedNotification(user.Email)
+			_ = s.passwordHistoryRepo.CleanupOld(user.ID, 5)
+			s.auditLogger.Log(&dto.AuditContext{UserID: user.ID}, "password_reset_completed", "user", map[string]interface{}{
+				"email": user.Email,
+			})
+		}
 	}
 
 	return nil

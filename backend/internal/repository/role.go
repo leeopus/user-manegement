@@ -1,7 +1,10 @@
 package repository
 
 import (
+	"time"
+
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Role struct {
@@ -22,6 +25,9 @@ type RoleRepository interface {
 	List(offset, limit int) ([]Role, int64, error)
 	AssignPermission(roleID, permissionID uint) error
 	RemovePermission(roleID, permissionID uint) error
+	GetUserIDsByRoleID(roleID uint) ([]uint, error)
+	AssignRoleToUser(userID, roleID uint) error
+	RemoveRoleFromUser(userID, roleID uint) error
 }
 
 type roleRepository struct {
@@ -55,11 +61,23 @@ func (r *roleRepository) FindByCode(code string) (*Role, error) {
 }
 
 func (r *roleRepository) Update(role *Role) error {
-	return r.db.Save(role).Error
+	return r.db.Model(role).Select("name", "code", "description").Updates(role).Error
 }
 
+// Delete 删除角色并级联清理所有关联关系
 func (r *roleRepository) Delete(id uint) error {
-	return r.db.Delete(&Role{}, id).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// 清理 user_roles 关联
+		if err := tx.Where("role_id = ?", id).Delete(&UserRole{}).Error; err != nil {
+			return err
+		}
+		// 清理 role_permissions 关联
+		if err := tx.Where("role_id = ?", id).Delete(&RolePermission{}).Error; err != nil {
+			return err
+		}
+		// 删除角色本身
+		return tx.Delete(&Role{}, id).Error
+	})
 }
 
 func (r *roleRepository) List(offset, limit int) ([]Role, int64, error) {
@@ -75,9 +93,31 @@ func (r *roleRepository) List(offset, limit int) ([]Role, int64, error) {
 }
 
 func (r *roleRepository) AssignPermission(roleID, permissionID uint) error {
-	return r.db.Exec("INSERT INTO role_permissions (role_id, permission_id, created_at) VALUES (?, ?, NOW())", roleID, permissionID).Error
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&RolePermission{
+		RoleID:       roleID,
+		PermissionID: permissionID,
+		CreatedAt:    time.Now(),
+	}).Error
 }
 
 func (r *roleRepository) RemovePermission(roleID, permissionID uint) error {
 	return r.db.Where("role_id = ? AND permission_id = ?", roleID, permissionID).Delete(&RolePermission{}).Error
+}
+
+func (r *roleRepository) GetUserIDsByRoleID(roleID uint) ([]uint, error) {
+	var userIDs []uint
+	err := r.db.Table("user_roles").Where("role_id = ?", roleID).Pluck("user_id", &userIDs).Error
+	return userIDs, err
+}
+
+func (r *roleRepository) AssignRoleToUser(userID, roleID uint) error {
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&UserRole{
+		UserID:    userID,
+		RoleID:    roleID,
+		CreatedAt: time.Now(),
+	}).Error
+}
+
+func (r *roleRepository) RemoveRoleFromUser(userID, roleID uint) error {
+	return r.db.Where("user_id = ? AND role_id = ?", userID, roleID).Delete(&UserRole{}).Error
 }

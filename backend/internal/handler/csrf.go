@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/pkg/csrf"
 )
 
@@ -11,15 +13,20 @@ type CSRFHandler interface {
 	GetToken(c *gin.Context)
 }
 
-type csrfHandler struct{}
-
-func NewCSRFHandler() CSRFHandler {
-	return &csrfHandler{}
+type csrfHandler struct {
+	csrfManager *csrf.Manager
 }
 
-// GetToken 获取 CSRF token
+func NewCSRFHandler(redisClient *redis.Client) CSRFHandler {
+	return &csrfHandler{
+		csrfManager: csrf.NewCSRFManager(redisClient),
+	}
+}
+
+// GetToken 获取 CSRF token（绑定到当前 session 指纹）
 func (h *csrfHandler) GetToken(c *gin.Context) {
-	token, err := csrf.DefaultManager.GenerateToken()
+	sessionID := dto.SessionFingerprint(c)
+	token, err := h.csrfManager.GenerateToken(sessionID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -35,7 +42,7 @@ func (h *csrfHandler) GetToken(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"csrf_token": token,
-			"expires_at": "1h",
+			"expires_at": "30m",
 		},
 	})
 }

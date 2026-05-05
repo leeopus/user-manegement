@@ -13,9 +13,9 @@ import (
 
 // RateLimitConfig 限流配置
 type RateLimitConfig struct {
-	MaxRequests  int           // 最大请求次数
-	Window       time.Duration // 时间窗口
-	BlockDuration time.Duration // 封禁时长
+	MaxRequests   int
+	Window        time.Duration
+	BlockDuration time.Duration
 }
 
 // RateLimiter 限流器
@@ -23,28 +23,65 @@ type RateLimiter struct {
 	redis *redis.Client
 }
 
-// NewRateLimiter 创建限流器
 func NewRateLimiter(redisClient *redis.Client) *RateLimiter {
-	return &RateLimiter{
-		redis: redisClient,
-	}
+	return &RateLimiter{redis: redisClient}
 }
 
-// RateLimit 通用限流中间件
+// slidingWindowScript 滑动窗口限流 Lua 脚本
+// 使用 Sorted Set 以时间戳为 score，统计窗口内的请求数
+// 自动淘汰过期条目，避免内存无限增长
+var slidingWindowScript = redis.NewScript(`
+	local key = KEYS[1]
+	local now = tonumber(ARGV[1])
+	local window_ms = tonumber(ARGV[2])
+	local max_requests = tonumber(ARGV[3])
+	local member = ARGV[4]
+
+	local window_start = now - window_ms
+
+	-- 移除窗口外的旧记录
+	redis.call("ZREMRANGEBYSCORE", key, "-inf", window_start)
+
+	-- 统计当前窗口内的请求数
+	local count = redis.call("ZCARD", key)
+
+	if count >= max_requests then
+		return {count, 0}
+	end
+
+	-- 添加当前请求（score=now, member=now:random 避免重复）
+	redis.call("ZADD", key, now, member)
+
+	-- 设置 key 过期时间为窗口大小（自动清理）
+	redis.call("PEXPIRE", key, window_ms)
+
+	return {count + 1, 1}
+`)
+
+// RateLimit 通用限流中间件（滑动窗口算法）
 func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 如果 Redis 不可用，跳过限流
 		if rl.redis == nil {
-			c.Next()
+			c.JSON(503, gin.H{
+				"success": false,
+				"error": gin.H{
+					"code":    "RATE_LIMIT_UNAVAILABLE_503",
+					"message": "RATE_LIMIT_UNAVAILABLE",
+					"details": gin.H{
+						"reason": "rate limiter is unavailable, request rejected for security",
+					},
+				},
+			})
+			c.Abort()
 			return
 		}
 
-		// 获取客户端标识（IP）
+		ctx := c.Request.Context()
 		clientIP := c.ClientIP()
 
 		// 检查是否被封禁
 		blockedKey := fmt.Sprintf("rate_limit:blocked:%s", clientIP)
-		blocked, _ := rl.redis.Get(context.Background(), blockedKey).Result()
+		blocked, _ := rl.redis.Get(ctx, blockedKey).Result()
 		if blocked != "" {
 			c.JSON(429, gin.H{
 				"success": false,
@@ -61,25 +98,29 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 检查限流
+		// 滑动窗口限流
 		key := fmt.Sprintf("rate_limit:%s:%s", c.FullPath(), clientIP)
-		count, err := rl.redis.Incr(context.Background(), key).Result()
+		now := time.Now().UnixMilli()
+		member := fmt.Sprintf("%d:%s", now, c.GetString("request_id"))
+		windowMS := config.Window.Milliseconds()
+
+		result, err := slidingWindowScript.Run(ctx, rl.redis, []string{key},
+			now,
+			windowMS,
+			config.MaxRequests,
+			member,
+		).Int64Slice()
+
 		if err != nil {
-			// Redis 出错时不限流，降级处理
 			c.Next()
 			return
 		}
 
-		// 第一次访问，设置过期时间
-		if count == 1 {
-			rl.redis.Expire(context.Background(), key, config.Window)
-		}
+		count := result[0]
 
-		// 超过限制
 		if count > int64(config.MaxRequests) {
-			// 封禁该 IP
 			if config.BlockDuration > 0 {
-				rl.redis.Set(context.Background(), blockedKey, "1", config.BlockDuration)
+				rl.redis.Set(ctx, blockedKey, "1", config.BlockDuration)
 			}
 
 			c.JSON(429, gin.H{
@@ -98,7 +139,6 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 设置响应头显示剩余次数
 		c.Header("X-RateLimit-Limit", strconv.Itoa(config.MaxRequests))
 		c.Header("X-RateLimit-Remaining", strconv.Itoa(config.MaxRequests-int(count)))
 		c.Header("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(config.Window).Unix(), 10))
@@ -110,63 +150,104 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 // RegisterRateLimit 注册专用限流
 func RegisterRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	rl := NewRateLimiter(redisClient)
-
-	config := RateLimitConfig{
-		MaxRequests:   10,               // 开发环境：每10分钟最多10次注册
-		Window:        10 * time.Minute, // 10分钟窗口
-		BlockDuration: 1 * time.Hour,    // 封禁1小时
-	}
-
-	return rl.RateLimit(config)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   10,
+		Window:        10 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	})
 }
 
 // LoginRateLimit 登录专用限流（更严格）
 func LoginRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	rl := NewRateLimiter(redisClient)
-
-	config := RateLimitConfig{
-		MaxRequests:   10,               // 开发环境：每10分钟最多10次登录
-		Window:        10 * time.Minute, // 10分钟窗口
-		BlockDuration: 30 * time.Minute, // 封禁30分钟
-	}
-
-	return rl.RateLimit(config)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   10,
+		Window:        10 * time.Minute,
+		BlockDuration: 30 * time.Minute,
+	})
 }
 
 // APIRateLimit 通用 API 限流
 func APIRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	rl := NewRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   100,
+		Window:        1 * time.Minute,
+		BlockDuration: 10 * time.Minute,
+	})
+}
 
-	config := RateLimitConfig{
-		MaxRequests:   100,               // 每分钟最多100次请求
-		Window:        1 * time.Minute,   // 1分钟窗口
-		BlockDuration: 10 * time.Minute,  // 封禁10分钟
-	}
+// OAuthTokenRateLimit OAuth token 端点专用限流（防止暴力破解 authorization code / client secret）
+func OAuthTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   20,
+		Window:        1 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	})
+}
 
-	return rl.RateLimit(config)
+// PasswordResetRateLimit 密码重置端点专用限流（防止邮件轰炸和邮箱枚举）
+func PasswordResetRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   3,
+		Window:        1 * time.Hour,
+		BlockDuration: 24 * time.Hour,
+	})
+}
+
+// RefreshRateLimit token 刷新端点专用限流
+func RefreshRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   30,
+		Window:        15 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	})
+}
+
+// CSRFTokenRateLimit CSRF token 端点专用限流（防止 token 滥用消耗 Redis 内存）
+func CSRFTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   30,
+		Window:        1 * time.Minute,
+		BlockDuration: 10 * time.Minute,
+	})
 }
 
 // GetRemainingAttempts 获取剩余尝试次数
 func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string) (int, error) {
+	if rl.redis == nil {
+		return 3, nil
+	}
+
+	ctx := context.Background()
 	key := fmt.Sprintf("rate_limit:%s:%s", path, clientIP)
-	val, err := rl.redis.Get(context.Background(), key).Result()
+
+	// 滑动窗口：统计当前窗口内的请求数
+	count, err := rl.redis.ZCard(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return 3, nil // 默认限制
+			return 3, nil
 		}
 		return 0, err
 	}
 
-	count, _ := strconv.Atoi(val)
-	return 3 - count, nil
+	return 3 - int(count), nil
 }
 
 // ResetRateLimit 重置限流（管理员功能）
 func (rl *RateLimiter) ResetRateLimit(path, clientIP string) error {
+	if rl.redis == nil {
+		return nil
+	}
+
+	ctx := context.Background()
 	key := fmt.Sprintf("rate_limit:%s:%s", path, clientIP)
 	blockedKey := fmt.Sprintf("rate_limit:blocked:%s", clientIP)
 
-	// 清除计数和封禁
-	rl.redis.Del(context.Background(), key)
-	return rl.redis.Del(context.Background(), blockedKey).Err()
+	rl.redis.Del(ctx, key)
+	return rl.redis.Del(ctx, blockedKey).Err()
 }

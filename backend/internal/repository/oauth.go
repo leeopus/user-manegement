@@ -1,6 +1,10 @@
 package repository
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"time"
+
 	"gorm.io/gorm"
 )
 
@@ -16,13 +20,19 @@ type OAuthApplication struct {
 
 type OAuthToken struct {
 	gorm.Model
-	ApplicationID uint   `gorm:"not null"`
-	UserID        uint   `gorm:"not null"`
-	AccessToken   string `gorm:"size:500;uniqueIndex;not null"`
-	RefreshToken  string `gorm:"size:500;uniqueIndex"`
-	ExpiresAt     gorm.DeletedAt
+	ApplicationID uint   `gorm:"not null;index:idx_oauth_token_app"`
+	UserID        uint   `gorm:"not null;index:idx_oauth_token_user"`
+	AccessToken   string `gorm:"size:64;uniqueIndex;not null"`
+	RefreshToken  string `gorm:"size:64;uniqueIndex"`
+	ExpiresAt     time.Time
 	Application   OAuthApplication `gorm:"foreignKey:ApplicationID"`
 	User          User             `gorm:"foreignKey:UserID"`
+}
+
+// HashOAuthToken 计算 OAuth token 的 SHA-256 哈希，用于数据库存储和查询
+func HashOAuthToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
 }
 
 type OAuthApplicationRepository interface {
@@ -36,11 +46,11 @@ type OAuthApplicationRepository interface {
 
 type OAuthTokenRepository interface {
 	Create(token *OAuthToken) error
-	FindByAccessToken(token string) (*OAuthToken, error)
-	FindByRefreshToken(token string) (*OAuthToken, error)
+	FindByAccessToken(hash string) (*OAuthToken, error)
+	FindByRefreshToken(hash string) (*OAuthToken, error)
 	Update(token *OAuthToken) error
 	Delete(id uint) error
-	RevokeToken(tokenString string) error
+	RevokeByTokenHash(hash string) error
 }
 
 type oauthApplicationRepository struct {
@@ -74,11 +84,16 @@ func (r *oauthApplicationRepository) FindByClientID(clientID string) (*OAuthAppl
 }
 
 func (r *oauthApplicationRepository) Update(app *OAuthApplication) error {
-	return r.db.Save(app).Error
+	return r.db.Model(app).Select("name", "redirect_uris").Updates(app).Error
 }
 
 func (r *oauthApplicationRepository) Delete(id uint) error {
-	return r.db.Delete(&OAuthApplication{}, id).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("application_id = ?", id).Delete(&OAuthToken{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&OAuthApplication{}, id).Error
+	})
 }
 
 func (r *oauthApplicationRepository) List(offset, limit int) ([]OAuthApplication, int64, error) {
@@ -105,18 +120,18 @@ func (r *oauthTokenRepository) Create(token *OAuthToken) error {
 	return r.db.Create(token).Error
 }
 
-func (r *oauthTokenRepository) FindByAccessToken(token string) (*OAuthToken, error) {
+func (r *oauthTokenRepository) FindByAccessToken(hash string) (*OAuthToken, error) {
 	var oauthToken OAuthToken
-	err := r.db.Preload("User").Preload("Application").Where("access_token = ?", token).First(&oauthToken).Error
+	err := r.db.Preload("User").Preload("Application").Where("access_token = ?", hash).First(&oauthToken).Error
 	if err != nil {
 		return nil, err
 	}
 	return &oauthToken, nil
 }
 
-func (r *oauthTokenRepository) FindByRefreshToken(token string) (*OAuthToken, error) {
+func (r *oauthTokenRepository) FindByRefreshToken(hash string) (*OAuthToken, error) {
 	var oauthToken OAuthToken
-	err := r.db.Preload("User").Preload("Application").Where("refresh_token = ?", token).First(&oauthToken).Error
+	err := r.db.Preload("User").Preload("Application").Where("refresh_token = ?", hash).First(&oauthToken).Error
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +146,7 @@ func (r *oauthTokenRepository) Delete(id uint) error {
 	return r.db.Delete(&OAuthToken{}, id).Error
 }
 
-func (r *oauthTokenRepository) RevokeToken(tokenString string) error {
-	return r.db.Where("access_token = ? OR refresh_token = ?", tokenString, tokenString).Delete(&OAuthToken{}).Error
+// RevokeByTokenHash 通过 token 哈希吊销（匹配 access_token 或 refresh_token）
+func (r *oauthTokenRepository) RevokeByTokenHash(hash string) error {
+	return r.db.Where("access_token = ? OR refresh_token = ?", hash, hash).Delete(&OAuthToken{}).Error
 }

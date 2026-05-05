@@ -1,101 +1,404 @@
 package service
 
 import (
-	"errors"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/repository"
+	"github.com/user-system/backend/pkg/auth"
+	apperrors "github.com/user-system/backend/pkg/errors"
 	"github.com/user-system/backend/pkg/utils"
+	"go.uber.org/zap"
 )
 
 type OAuthService interface {
-	CreateApplication(name, clientSecret, redirectURIs string) (*repository.OAuthApplication, error)
-	Authorize(clientID, redirectURI string) (*repository.OAuthApplication, error)
-	Token(clientID, clientSecret, code string) (string, string, error)
+	CreateApplication(name, redirectURIs, scopes string, auditCtx dto.AuditContext) (*repository.OAuthApplication, string, error)
+	GetApplication(id uint) (*repository.OAuthApplication, error)
+	UpdateApplication(id uint, name, redirectURIs string, auditCtx dto.AuditContext) (*repository.OAuthApplication, error)
+	DeleteApplication(id uint, auditCtx dto.AuditContext) error
+	ListApplications(offset, pageSize int) ([]repository.OAuthApplication, int64, error)
+	Authorize(userID uint, clientID, redirectURI, state, scope, ipAddress, userAgent string) (string, error)
+	Token(clientID, clientSecret, code, redirectURI string) (string, string, error)
 	Userinfo(accessToken string) (*repository.User, error)
+	UserinfoByID(userID uint) (*repository.User, error)
 }
 
 type oauthService struct {
-	appRepo   repository.OAuthApplicationRepository
-	tokenRepo repository.OAuthTokenRepository
-	userRepo  repository.UserRepository
-	auditLogRepo repository.AuditLogRepository
+	appRepo      repository.OAuthApplicationRepository
+	tokenRepo    repository.OAuthTokenRepository
+	userRepo     repository.UserRepository
+	auditLogger  *AuditLogger
+	blacklistMgr *auth.TokenBlacklistManager
+	redis        *redis.Client
 }
 
-func NewOAuthService(appRepo repository.OAuthApplicationRepository, tokenRepo repository.OAuthTokenRepository, userRepo repository.UserRepository, auditLogRepo repository.AuditLogRepository) OAuthService {
+func NewOAuthService(appRepo repository.OAuthApplicationRepository, tokenRepo repository.OAuthTokenRepository, userRepo repository.UserRepository, auditLogger *AuditLogger, redisClient *redis.Client, blacklistMgr *auth.TokenBlacklistManager) OAuthService {
 	return &oauthService{
-		appRepo:   appRepo,
-		tokenRepo: tokenRepo,
-		userRepo:  userRepo,
-		auditLogRepo: auditLogRepo,
+		appRepo:      appRepo,
+		tokenRepo:    tokenRepo,
+		userRepo:     userRepo,
+		auditLogger:  auditLogger,
+		blacklistMgr: blacklistMgr,
+		redis:        redisClient,
 	}
 }
 
-func (s *oauthService) CreateApplication(name, clientSecret, redirectURIs string) (*repository.OAuthApplication, error) {
-	// Generate a simple client ID
-	clientID := "client_" + time.Now().Format("20060102150405")
+type authorizationCodeData struct {
+	ClientID    string `json:"client_id"`
+	UserID      uint   `json:"user_id"`
+	RedirectURI string `json:"redirect_uri"`
+	State       string `json:"state"`
+	Scope       string `json:"scope"`
+}
+
+func (s *oauthService) CreateApplication(name, redirectURIs, scopes string, auditCtx dto.AuditContext) (*repository.OAuthApplication, string, error) {
+	clientID, err := utils.GenerateRandomString(16)
+	if err != nil {
+		return nil, "", apperrors.ErrInternalServer
+	}
+	clientID = "client_" + clientID
+
+	// 服务端自动生成 client_secret，仅在创建时返回明文
+	rawSecret, err := utils.GenerateRandomString(24)
+	if err != nil {
+		return nil, "", apperrors.ErrInternalServer
+	}
+
+	hashedSecret, err := utils.HashSecret(rawSecret)
+	if err != nil {
+		zap.L().Error("Failed to hash client secret", zap.Error(err))
+		return nil, "", apperrors.ErrInternalServer
+	}
+
+	// 验证 redirect URIs
+	for _, uri := range strings.Split(redirectURIs, ",") {
+		trimmed := strings.TrimSpace(uri)
+		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+			return nil, "", apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
+				"reason": "redirect URI must use http or https protocol",
+			})
+		}
+		if err := validateRedirectURIIsPublic(trimmed); err != nil {
+			return nil, "", apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
+				"reason": err.Error(),
+			})
+		}
+	}
+
+	if scopes == "" {
+		scopes = "read"
+	}
 
 	app := &repository.OAuthApplication{
 		Name:         name,
 		ClientID:     clientID,
-		ClientSecret: clientSecret,
+		ClientSecret: hashedSecret,
 		RedirectURIs: redirectURIs,
+		Scopes:       scopes,
 	}
 	if err := s.appRepo.Create(app); err != nil {
-		return nil, err
+		return nil, "", apperrors.ErrInternalServer
 	}
-	return app, nil
+
+	s.auditLogger.Log(&auditCtx, "create_oauth_application", "oauth", map[string]interface{}{
+		"application_name": name,
+		"client_id":        clientID,
+	})
+
+	return app, rawSecret, nil
 }
 
-func (s *oauthService) Authorize(clientID, redirectURI string) (*repository.OAuthApplication, error) {
+func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scope, ipAddress, userAgent string) (string, error) {
+	if state == "" {
+		return "", apperrors.ErrOAuthInvalidState
+	}
+
 	app, err := s.appRepo.FindByClientID(clientID)
 	if err != nil {
-		return nil, errors.New("invalid client_id")
+		return "", apperrors.ErrOAuthInvalidClient
 	}
-	return app, nil
+
+	if !isValidRedirectURI(app.RedirectURIs, redirectURI) {
+		return "", apperrors.ErrOAuthInvalidRedirectURI
+	}
+
+	// 验证请求的 scope 是否在应用注册的 scopes 范围内
+	if scope == "" {
+		scope = "read" // 默认 scope
+	}
+	if !isValidScope(app.Scopes, scope) {
+		return "", apperrors.ErrOAuthInvalidScope
+	}
+
+	code, err := utils.GenerateRandomString(32)
+	if err != nil {
+		return "", apperrors.ErrInternalServer
+	}
+
+	codeData := authorizationCodeData{
+		ClientID:    clientID,
+		UserID:      userID,
+		RedirectURI: redirectURI,
+		State:       state,
+		Scope:       scope,
+	}
+	codeDataJSON, _ := json.Marshal(codeData)
+
+	if s.redis == nil {
+		return "", apperrors.ErrInternalServer
+	}
+
+	ctx := context.Background()
+	key := fmt.Sprintf("oauth:auth_code:%s", code)
+	if err := s.redis.Set(ctx, key, string(codeDataJSON), 5*time.Minute).Err(); err != nil {
+		zap.L().Error("Failed to store authorization code", zap.Error(err))
+		return "", apperrors.ErrInternalServer
+	}
+
+	s.auditLogger.Log(&dto.AuditContext{
+		UserID:    userID,
+		IPAddress: ipAddress,
+		UserAgent: userAgent,
+	}, "oauth_authorize", "oauth", map[string]interface{}{
+		"client_id": clientID,
+	})
+
+	return code, nil
 }
 
-func (s *oauthService) Token(clientID, clientSecret, code string) (string, string, error) {
+func (s *oauthService) Token(clientID, clientSecret, code, redirectURI string) (string, string, error) {
 	app, err := s.appRepo.FindByClientID(clientID)
 	if err != nil {
-		return "", "", errors.New("invalid client_id")
+		return "", "", apperrors.ErrOAuthInvalidClient
 	}
 
-	if app.ClientSecret != clientSecret {
-		return "", "", errors.New("invalid client_secret")
+	if !utils.VerifySecret(clientSecret, app.ClientSecret) {
+		return "", "", apperrors.ErrOAuthInvalidClientSecret
 	}
 
-	// Generate access token
-	accessToken, err := utils.GenerateToken(1, "access", "token")
+	if s.redis == nil {
+		return "", "", apperrors.ErrInternalServer
+	}
+
+	ctx := context.Background()
+	key := fmt.Sprintf("oauth:auth_code:%s", code)
+
+	// 原子性 GET + DEL，确保 authorization code 只能使用一次
+	delScript := redis.NewScript(`
+		local val = redis.call("GET", KEYS[1])
+		if val == false then
+			return nil
+		end
+		redis.call("DEL", KEYS[1])
+		return val
+	`)
+	result, err := delScript.Run(ctx, s.redis, []string{key}).Result()
 	if err != nil {
-		return "", "", err
+		if err == redis.Nil {
+			return "", "", apperrors.ErrOAuthInvalidCode
+		}
+		return "", "", apperrors.ErrOAuthInvalidCode
+	}
+	codeDataStr, ok := result.(string)
+	if !ok {
+		return "", "", apperrors.ErrOAuthInvalidCode
 	}
 
-	refreshToken, err := utils.GenerateRefreshToken(1, "refresh", "token")
+	var codeData authorizationCodeData
+	if err := json.Unmarshal([]byte(codeDataStr), &codeData); err != nil {
+		return "", "", apperrors.ErrOAuthInvalidCode
+	}
+
+	if codeData.ClientID != clientID {
+		return "", "", apperrors.ErrOAuthInvalidCode
+	}
+
+	if codeData.RedirectURI != redirectURI {
+		return "", "", apperrors.ErrOAuthInvalidRedirectURI
+	}
+
+	user, err := s.userRepo.FindByID(codeData.UserID)
 	if err != nil {
-		return "", "", err
+		return "", "", apperrors.ErrUserNotFound
 	}
 
-	// For simplicity, using user ID 1
+	accessToken, _, err := utils.GenerateOAuthToken(user.ID, user.Username, user.Email, codeData.Scope, codeData.ClientID)
+	if err != nil {
+		return "", "", apperrors.ErrInternalServer
+	}
+
 	oauthToken := &repository.OAuthToken{
 		ApplicationID: app.ID,
-		UserID:        1,
-		AccessToken:   accessToken,
-		RefreshToken:  refreshToken,
+		UserID:        user.ID,
+		AccessToken:   repository.HashOAuthToken(accessToken),
+		ExpiresAt:     time.Now().Add(time.Hour),
 	}
-
 	if err := s.tokenRepo.Create(oauthToken); err != nil {
-		return "", "", err
+		zap.L().Error("Failed to store OAuth token", zap.Error(err))
 	}
 
-	return accessToken, refreshToken, nil
+	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID}, "oauth_token", "oauth", map[string]interface{}{
+		"client_id": clientID,
+	})
+
+	return accessToken, "", nil
 }
 
 func (s *oauthService) Userinfo(accessToken string) (*repository.User, error) {
-	token, err := s.tokenRepo.FindByAccessToken(accessToken)
+	claims, err := utils.ParseToken(accessToken)
 	if err != nil {
-		return nil, errors.New("invalid access token")
+		return nil, apperrors.ErrInvalidAccessToken
 	}
 
-	return s.userRepo.FindByID(token.UserID)
+	if blacklisted, _ := s.blacklistMgr.IsBlacklisted(claims.JTI); blacklisted {
+		return nil, apperrors.ErrInvalidAccessToken
+	}
+
+	if revoked, _ := s.blacklistMgr.IsUserRevoked(claims.UserID); revoked {
+		return nil, apperrors.ErrInvalidAccessToken
+	}
+
+	user, err := s.userRepo.FindByID(claims.UserID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	return user, nil
+}
+
+// UserinfoByID 通过已验证的 userID 获取用户信息（中间件已校验 token 有效性）
+func (s *oauthService) UserinfoByID(userID uint) (*repository.User, error) {
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	return user, nil
+}
+
+func (s *oauthService) GetApplication(id uint) (*repository.OAuthApplication, error) {
+	app, err := s.appRepo.FindByID(id)
+	if err != nil {
+		return nil, apperrors.ErrOAuthInvalidClient
+	}
+	return app, nil
+}
+
+func (s *oauthService) UpdateApplication(id uint, name, redirectURIs string, auditCtx dto.AuditContext) (*repository.OAuthApplication, error) {
+	app, err := s.appRepo.FindByID(id)
+	if err != nil {
+		return nil, apperrors.ErrOAuthInvalidClient
+	}
+	// 验证每个 redirect URI 格式
+	for _, uri := range strings.Split(redirectURIs, ",") {
+		trimmed := strings.TrimSpace(uri)
+		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+			return nil, apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
+				"reason": "redirect URI must use http or https protocol",
+			})
+		}
+	}
+	for _, uri := range strings.Split(redirectURIs, ",") {
+		trimmed := strings.TrimSpace(uri)
+		if err := validateRedirectURIIsPublic(trimmed); err != nil {
+			return nil, apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
+				"reason": err.Error(),
+			})
+		}
+	}
+	app.Name = name
+	app.RedirectURIs = redirectURIs
+	if err := s.appRepo.Update(app); err != nil {
+		return nil, apperrors.ErrInternalServer
+	}
+
+	s.auditLogger.Log(&auditCtx, "update_oauth_application", "oauth", map[string]interface{}{
+		"application_id":   id,
+		"application_name": name,
+	})
+	return app, nil
+}
+
+func (s *oauthService) DeleteApplication(id uint, auditCtx dto.AuditContext) error {
+	if err := s.appRepo.Delete(id); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	s.auditLogger.Log(&auditCtx, "delete_oauth_application", "oauth", map[string]interface{}{
+		"application_id": id,
+	})
+	return nil
+}
+
+func (s *oauthService) ListApplications(offset, pageSize int) ([]repository.OAuthApplication, int64, error) {
+	return s.appRepo.List(offset, pageSize)
+}
+
+func isValidRedirectURI(registeredURIs, requestedURI string) bool {
+	if registeredURIs == "" || requestedURI == "" {
+		return false
+	}
+	// 拒绝非 HTTP(S) 协议的 URI（防止 javascript: 等注入）
+	if !strings.HasPrefix(requestedURI, "http://") && !strings.HasPrefix(requestedURI, "https://") {
+		return false
+	}
+	for _, uri := range strings.Split(registeredURIs, ",") {
+		if strings.TrimSpace(uri) == requestedURI {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidScope 验证请求的 scope 是否全部在应用注册的 scopes 范围内
+func isValidScope(registeredScopes, requestedScope string) bool {
+	if registeredScopes == "" {
+		return false
+	}
+	registered := make(map[string]bool)
+	for _, s := range strings.Split(registeredScopes, ",") {
+		registered[strings.TrimSpace(s)] = true
+	}
+	for _, s := range strings.Split(requestedScope, ",") {
+		if !registered[strings.TrimSpace(s)] {
+			return false
+		}
+	}
+	return true
+}
+
+// validateRedirectURIIsPublic 检查 redirect URI 的 host 是否为公网地址，防止 SSRF
+func validateRedirectURIIsPublic(rawURI string) error {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return fmt.Errorf("invalid redirect URI: %s", err)
+	}
+
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("redirect URI must have a host")
+	}
+
+	// 拒绝明显的主机名模式
+	lowerHost := strings.ToLower(host)
+	internalHostnames := []string{"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "metadata.google.internal", "169.254.169.254"}
+	for _, h := range internalHostnames {
+		if lowerHost == h {
+			return fmt.Errorf("redirect URI must not point to internal address: %s", host)
+		}
+	}
+
+	// 解析 IP 地址做进一步检查
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("redirect URI must not point to internal/private IP: %s", host)
+		}
+	}
+
+	return nil
 }

@@ -44,13 +44,13 @@ export interface RefreshTokenRequest {
 // =====================================================
 
 export interface User {
-  ID: number
-  Email: string
-  Username: string
-  Avatar?: string
-  Status?: string
-  CreatedAt?: string
-  UpdatedAt?: string
+  id: number
+  email: string
+  username: string
+  avatar?: string
+  status?: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface LoginResponseData {

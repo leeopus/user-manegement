@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
 	"github.com/user-system/backend/pkg/response"
 )
@@ -31,19 +32,23 @@ type CreateRoleRequest struct {
 }
 
 func (h *roleHandler) ListRoles(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	page, pageSize, offset := response.ParsePagination(c)
 
-	roles, total, err := h.roleService.ListRoles(page, pageSize)
+	roles, total, err := h.roleService.ListRoles(offset, pageSize)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
+	roleResponses := make([]dto.RoleResponse, len(roles))
+	for i := range roles {
+		roleResponses[i] = dto.ToRoleResponse(&roles[i])
+	}
+
 	response.Success(c, gin.H{
-		"roles": roles,
-		"total": total,
-		"page":  page,
+		"roles":     roleResponses,
+		"total":     total,
+		"page":      page,
 		"page_size": pageSize,
 	})
 }
@@ -61,7 +66,7 @@ func (h *roleHandler) GetRole(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, role)
+	response.Success(c, dto.ToRoleResponse(role))
 }
 
 func (h *roleHandler) CreateRole(c *gin.Context) {
@@ -71,13 +76,13 @@ func (h *roleHandler) CreateRole(c *gin.Context) {
 		return
 	}
 
-	role, err := h.roleService.CreateRole(req.Name, req.Code, req.Description)
+	role, err := h.roleService.CreateRole(req.Name, req.Code, req.Description, getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Success(c, role)
+	response.Created(c, dto.ToRoleResponse(role))
 }
 
 func (h *roleHandler) UpdateRole(c *gin.Context) {
@@ -93,13 +98,13 @@ func (h *roleHandler) UpdateRole(c *gin.Context) {
 		return
 	}
 
-	role, err := h.roleService.UpdateRole(uint(id), req.Name, req.Code, req.Description)
+	role, err := h.roleService.UpdateRole(uint(id), req.Name, req.Code, req.Description, getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	response.Success(c, role)
+	response.Success(c, dto.ToRoleResponse(role))
 }
 
 func (h *roleHandler) DeleteRole(c *gin.Context) {
@@ -109,7 +114,7 @@ func (h *roleHandler) DeleteRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.roleService.DeleteRole(uint(id)); err != nil {
+	if err := h.roleService.DeleteRole(uint(id), getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { useRouter, usePathname } from '@/i18n/routing'
 import { api } from './api'
+import { isAuthError, isNetworkError } from './errors'
 import type { User } from './types'
 
 interface AuthContextType {
@@ -16,8 +17,11 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// 不需要认证的页面路径
 const PUBLIC_PATHS = ['/login', '/register', '/forgot-password', '/reset-password']
+
+// Retry config for transient network errors
+const INIT_RETRY_COUNT = 2
+const INIT_RETRY_DELAY_MS = 1000
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -25,44 +29,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
 
-  // 从 localStorage 恢复用户状态
+  // 初始化：通过 httpOnly cookie 获取当前用户，区分网络错误和认证失败
   useEffect(() => {
-    const initAuth = async () => {
+    const initAuth = async (retriesLeft = INIT_RETRY_COUNT) => {
+      let shouldKeepLoading = false
       try {
-        // 尝试通过 cookie (httpOnly) 获取当前用户
-        // 后端会从 cookie 中读取 access_token / refresh_token
-        const currentUser = await api.getUserInfo('')
+        const currentUser = await api.getUserInfo()
         setUser(currentUser)
-        localStorage.setItem('user', JSON.stringify(currentUser))
-      } catch {
-        // cookie 无效或过期
-        localStorage.removeItem('user')
-        setUser(null)
+      } catch (error) {
+        if (isNetworkError(error) && retriesLeft > 0) {
+          // 网络错误：延迟重试，不登出用户，保持 loading 状态
+          shouldKeepLoading = true
+          setTimeout(() => initAuth(retriesLeft - 1), INIT_RETRY_DELAY_MS)
+          return
+        }
+        if (isAuthError(error)) {
+          // 认证失败（401）：确实没有有效 session
+          setUser(null)
+        } else {
+          // 其他错误（服务器 500 等）：不登出用户，仅标记加载完成
+          setUser(null)
+        }
       } finally {
-        setLoading(false)
+        if (!shouldKeepLoading) {
+          setLoading(false)
+        }
       }
     }
 
     initAuth()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // 自动 token 刷新：每 12 分钟尝试刷新（access token 15 分钟过期）
-  useEffect(() => {
-    if (!user) return
-
-    const interval = setInterval(async () => {
-      try {
-        await api.refreshToken('')
-      } catch {
-        // 刷新失败，清除状态并跳转登录
-        setUser(null)
-        localStorage.removeItem('user')
-        router.push('/login')
-      }
-    }, 12 * 60 * 1000)
-
-    return () => clearInterval(interval)
-  }, [user, router])
 
   // 路由守卫
   useEffect(() => {
@@ -80,34 +77,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string, rememberMe = false) => {
     const data = await api.login({ email, password, remember_me: rememberMe })
     setUser(data.user)
-    localStorage.setItem('user', JSON.stringify(data.user))
-
-    if (rememberMe) {
-      localStorage.setItem('rememberMe', 'true')
-    } else {
-      localStorage.removeItem('rememberMe')
-    }
   }, [])
 
   const logout = useCallback(async () => {
     try {
-      await api.logout('')
+      await api.logout()
     } catch {
       // 即使 logout API 失败也要清除本地状态
     }
     setUser(null)
-    localStorage.removeItem('user')
     router.push('/login')
   }, [router])
 
   const refreshUser = useCallback(async () => {
     try {
-      const currentUser = await api.getUserInfo('')
+      const currentUser = await api.getUserInfo()
       setUser(currentUser)
-      localStorage.setItem('user', JSON.stringify(currentUser))
     } catch {
       setUser(null)
-      localStorage.removeItem('user')
     }
   }, [])
 

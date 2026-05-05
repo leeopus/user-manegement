@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/config"
 )
 
 const (
@@ -12,13 +13,16 @@ const (
 	RefreshTokenCookie = "refresh_token"
 )
 
-// isSecureRequest 判断是否为安全连接（HTTPS），支持反向代理场景
+// isSecureRequest 判断是否应使用 Secure cookie 标志
 func isSecureRequest(c *gin.Context) bool {
-	// 直接 TLS 连接
+	cfg := config.Get()
+	if cfg != nil && cfg.Security.CookieSecure {
+		return true
+	}
+	// 非 release 模式的回退逻辑：根据实际连接判断
 	if c.Request.TLS != nil {
 		return true
 	}
-	// 反向代理场景：检查 X-Forwarded-Proto header
 	if c.GetHeader("X-Forwarded-Proto") == "https" {
 		return true
 	}
@@ -29,16 +33,15 @@ func isSecureRequest(c *gin.Context) bool {
 func SetTokenCookie(c *gin.Context, name, token string, maxAge time.Duration) {
 	isSecure := isSecureRequest(c)
 
-	// 生产环境必须使用 Secure 和 SameSite
-	c.SetSameSite(http.SameSiteLaxMode) // Lax 比 Strict 更适合 SSO 场景（允许跨站 GET 导航带 cookie）
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		name,
 		token,
 		int(maxAge.Seconds()),
-		"/",       // path
-		"",        // domain (空字符串表示当前域名)
-		isSecure,  // secure (根据协议自动设置)
-		true,      // httpOnly (prevent XSS)
+		"/",
+		"",
+		isSecure,
+		true,
 	)
 }
 
@@ -59,11 +62,11 @@ func ClearTokenCookie(c *gin.Context, name string) {
 	c.SetCookie(
 		name,
 		"",
-		-1,        // maxAge (负值表示立即删除)
-		"/",       // path
-		"",        // domain
-		isSecure,  // secure
-		true,      // httpOnly
+		-1,
+		"/",
+		"",
+		isSecure,
+		true,
 	)
 }
 

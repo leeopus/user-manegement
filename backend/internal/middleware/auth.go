@@ -1,100 +1,143 @@
 package middleware
 
 import (
-	"time"
+	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/user-system/backend/pkg/jwt"
+	"github.com/user-system/backend/pkg/auth"
 	"github.com/user-system/backend/pkg/response"
 	"github.com/user-system/backend/pkg/utils"
+	"go.uber.org/zap"
 )
 
-func Auth() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var tokenString string
+const (
+	accessTokenCookie  = "access_token"
+	refreshTokenCookie = "refresh_token"
+)
 
-		// 1. 首先尝试从 Authorization header 获取 token
-		authHeader := c.GetHeader("Authorization")
-		if authHeader != "" && len(authHeader) >= 7 && authHeader[:6] == "Bearer" {
-			tokenString = authHeader[7:]
-		} else {
-			// 2. 如果没有 header，尝试从 cookie 获取 token（支持"记住我"功能）
-			token, err := jwt.GetTokenCookie(c, jwt.AccessTokenCookie)
+// tokenSource 控制 token 提取来源
+type tokenSource int
+
+const (
+	tokenSourceAll    tokenSource = iota // header + cookie fallback
+	tokenSourceHeaderOnly                // header only (OAuth)
+)
+
+// tokenRestriction 控制 token 类型限制
+type tokenRestriction int
+
+const (
+	restrictionNone      tokenRestriction = iota // 无限制
+	restrictionNoOAuth                            // 拒绝 OAuth token（常规 API 用）
+	restrictionOAuthOnly                          // 仅允许 OAuth token（OAuth userinfo 用）
+)
+
+// extractBearerToken 从 Authorization header 提取 Bearer token
+func extractBearerToken(authHeader string) string {
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(authHeader, "Bearer ")
+}
+
+// getTokenCookie 从 cookie 获取 token
+func getTokenCookie(c *gin.Context, name string) (string, error) {
+	token, err := c.Cookie(name)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// authenticate 通用认证逻辑（Auth 和 OAuthAuth 共用）
+func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, source tokenSource, restriction tokenRestriction) {
+	var tokenString string
+
+	authHeader := c.GetHeader("Authorization")
+	if tokenString = extractBearerToken(authHeader); tokenString == "" {
+		if source == tokenSourceAll {
+			token, err := getTokenCookie(c, accessTokenCookie)
 			if err == nil && token != "" {
 				tokenString = token
-			} else {
-				// 3. 如果 access_token 过期，尝试使用 refresh_token
-				refreshToken, err := jwt.GetTokenCookie(c, jwt.RefreshTokenCookie)
-				if err == nil && refreshToken != "" {
-					// 验证 refresh token 并自动刷新
-					claims, err := utils.ParseToken(refreshToken)
-					if err == nil {
-						// 生成新的 access token
-						newAccessToken, err := utils.GenerateToken(claims.UserID, claims.Username, claims.Email)
-						if err == nil {
-							// 设置新的 access token cookie (15分钟)
-							jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 15*time.Minute)
-							tokenString = newAccessToken
-						}
-					}
-				}
 			}
 		}
+	}
 
-		// 如果都没有获取到 token，返回未授权
-		if tokenString == "" {
-			response.Unauthorized(c)
-			c.Abort()
-			return
-		}
+	if tokenString == "" {
+		response.Unauthorized(c)
+		c.Abort()
+		return
+	}
 
-		// 验证 token
-		claims, err := utils.ParseToken(tokenString)
-		if err != nil {
-			response.Unauthorized(c)
-			c.Abort()
-			return
-		}
+	claims, err := utils.ParseToken(tokenString)
+	if err != nil {
+		response.Unauthorized(c)
+		c.Abort()
+		return
+	}
 
-		// 将用户信息存入 context
-		c.Set("user_id", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("email", claims.Email)
+	if claims.TokenType == "refresh" {
+		response.Unauthorized(c)
+		c.Abort()
+		return
+	}
 
-		c.Next()
+	// OAuth token 隔离：根据路由限制 token 类型
+	if restriction == restrictionNoOAuth && claims.ClientID != "" {
+		response.Forbidden(c)
+		c.Abort()
+		return
+	}
+	if restriction == restrictionOAuthOnly && claims.ClientID == "" {
+		response.Forbidden(c)
+		c.Abort()
+		return
+	}
+
+	revoked, blacklisted, err := blacklistMgr.CheckTokenStatus(c.Request.Context(), claims.UserID, claims.JTI)
+	if err != nil {
+		zap.L().Warn("Token status check failed, rejecting request for security", zap.Error(err))
+		response.Unauthorized(c)
+		c.Abort()
+		return
+	}
+	if revoked || blacklisted {
+		response.Unauthorized(c)
+		c.Abort()
+		return
+	}
+
+	// 检查用户状态是否仍然 active（利用 Redis 缓存，零额外开销）
+	active, statusErr := blacklistMgr.CheckUserStatus(claims.UserID)
+	if statusErr != nil {
+		zap.L().Warn("User status check failed, rejecting request for security", zap.Error(statusErr))
+		response.Unauthorized(c)
+		c.Abort()
+		return
+	}
+	if !active {
+		response.Forbidden(c)
+		c.Abort()
+		return
+	}
+
+	c.Set("user_id", claims.UserID)
+	c.Set("username", claims.Username)
+	c.Set("email", claims.Email)
+
+	c.Next()
+}
+
+// Auth 创建认证中间件（支持 Bearer header + cookie fallback，拒绝 OAuth token）
+func Auth(blacklistMgr *auth.TokenBlacklistManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authenticate(c, blacklistMgr, tokenSourceAll, restrictionNoOAuth)
 	}
 }
 
-func OAuthAuth() gin.HandlerFunc {
+// OAuthAuth 创建 OAuth 认证中间件（仅 Bearer header，仅允许 OAuth token）
+func OAuthAuth(blacklistMgr *auth.TokenBlacklistManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			response.Unauthorized(c)
-			c.Abort()
-			return
-		}
-
-		if len(authHeader) < 7 || authHeader[:6] != "Bearer" {
-			response.Unauthorized(c)
-			c.Abort()
-			return
-		}
-
-		tokenString := authHeader[7:]
-
-		// 验证 token
-		claims, err := utils.ParseToken(tokenString)
-		if err != nil {
-			response.Unauthorized(c)
-			c.Abort()
-			return
-		}
-
-		// 将用户信息存入 context
-		c.Set("user_id", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("email", claims.Email)
-
-		c.Next()
+		authenticate(c, blacklistMgr, tokenSourceHeaderOnly, restrictionOAuthOnly)
 	}
 }

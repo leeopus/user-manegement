@@ -8,14 +8,15 @@ import (
 
 type AuditLog struct {
 	gorm.Model
-	UserID     uint
-	Action     string `gorm:"size:50;not null"`
-	Resource   string `gorm:"size:100;not null"`
+	UserID     uint   `gorm:"index:idx_audit_user_created"`
+	Action     string `gorm:"size:50;not null;index:idx_audit_action"`
+	Resource   string `gorm:"size:100;not null;index:idx_audit_resource"`
 	ResourceID uint
 	Details    string `gorm:"type:text"`
 	IPAddress  string `gorm:"size:50"`
 	UserAgent  string `gorm:"size:500"`
-	User       User `gorm:"foreignKey:UserID"`
+	RequestID  string `gorm:"size:64;index:idx_audit_request_id"`
+	User       User   `gorm:"foreignKey:UserID"`
 }
 
 type AuditLogRepository interface {

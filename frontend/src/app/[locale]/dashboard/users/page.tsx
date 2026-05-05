@@ -12,17 +12,18 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
+import { api } from "@/lib/api"
 
-interface User {
-  ID: number
-  Username: string
-  Email: string
-  Status: string
-  CreatedAt: string
+interface UserItem {
+  id: number
+  username: string
+  email: string
+  status: string
+  created_at: string
 }
 
 export default function UsersPage() {
-  const [users, setUsers] = useState<User[]>([])
+  const [users, setUsers] = useState<UserItem[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -31,18 +32,8 @@ export default function UsersPage() {
 
   const fetchUsers = async () => {
     try {
-      // 使用credentials: 'include' 让浏览器自动发送httpOnly cookie中的token
-      const response = await fetch("http://localhost:8080/api/v1/users?page=1&page_size=10", {
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      })
-
-      const data = await response.json()
-      if (data.success) {
-        setUsers(data.data.users || [])
-      }
+      const data = await api.listUsers(1, 10)
+      setUsers((data.users as unknown as UserItem[]) || [])
     } catch (error) {
       console.error("Failed to fetch users:", error)
     } finally {
@@ -85,21 +76,21 @@ export default function UsersPage() {
                   </TableRow>
                 ) : (
                   users.map((user) => (
-                    <TableRow key={user.ID}>
-                      <TableCell>{user.ID}</TableCell>
-                      <TableCell>{user.Username}</TableCell>
-                      <TableCell>{user.Email}</TableCell>
+                    <TableRow key={user.id}>
+                      <TableCell>{user.id}</TableCell>
+                      <TableCell>{user.username}</TableCell>
+                      <TableCell>{user.email}</TableCell>
                       <TableCell>
                         <Badge
                           variant={
-                            user.Status === "active" ? "default" : "secondary"
+                            user.status === "active" ? "default" : "secondary"
                           }
                         >
-                          {user.Status}
+                          {user.status}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {new Date(user.CreatedAt).toLocaleDateString()}
+                        {new Date(user.created_at).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm">

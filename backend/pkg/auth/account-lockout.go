@@ -7,70 +7,99 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/user-system/backend/internal/config"
 )
 
 const (
-	// 登录失败配置
-	MaxFailedAttempts = 5                     // 最大失败次数
-	LockoutDuration    = 30 * time.Minute    // 锁定时长
-	AttemptWindow     = 15 * time.Minute     // 失败尝试的时间窗口
+	attemptWindow = 15 * time.Minute
 )
 
-// AccountLockoutManager 账户锁定管理器
+// AccountLockoutManager 账户锁定管理器（IP + Email 双维度 + Email 全局聚合）
 type AccountLockoutManager struct {
 	redis *redis.Client
 }
 
-// NewAccountLockoutManager 创建账户锁定管理器
 func NewAccountLockoutManager(redisClient *redis.Client) *AccountLockoutManager {
-	return &AccountLockoutManager{
-		redis: redisClient,
-	}
+	return &AccountLockoutManager{redis: redisClient}
 }
 
-// RecordFailedAttempt 记录失败尝试
-func (m *AccountLockoutManager) RecordFailedAttempt(email string) error {
+func getLockoutConfig() (maxFailed int, maxTotal int, lockoutDur time.Duration) {
+	cfg := config.Get()
+	if cfg != nil {
+		return cfg.Security.MaxFailedAttempts, cfg.Security.MaxTotalAttempts,
+			time.Duration(cfg.Security.LockoutDurationMin) * time.Minute
+	}
+	return 5, 15, 30 * time.Minute
+}
+
+func (m *AccountLockoutManager) ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), redisOpTimeout)
+}
+
+func failedAttemptsKey(email, ip string) string {
+	return fmt.Sprintf("auth:failed_attempts:%s:%s", email, ip)
+}
+
+func totalFailedAttemptsKey(email string) string {
+	return fmt.Sprintf("auth:total_failed:%s", email)
+}
+
+func lockedKey(email string) string {
+	return fmt.Sprintf("auth:locked:%s", email)
+}
+
+// RecordFailedAttempt 记录来自特定 IP 对特定 email 的失败尝试
+func (m *AccountLockoutManager) RecordFailedAttempt(email, ip string) error {
 	if m.redis == nil {
-		return nil // Redis 不可用时不记录
+		return nil
 	}
 
-	ctx := context.Background()
+	ctx, cancel := m.ctx()
+	defer cancel()
+	key := failedAttemptsKey(email, ip)
 
-	// 记录失败次数
-	key := fmt.Sprintf("auth:failed_attempts:%s", email)
 	count, err := m.redis.Incr(ctx, key).Result()
 	if err != nil {
 		return err
 	}
 
-	// 设置过期时间（第一次失败时）
 	if count == 1 {
-		m.redis.Expire(ctx, key, AttemptWindow)
+		m.redis.Expire(ctx, key, attemptWindow)
 	}
 
-	// 检查是否需要锁定账户
-	if count >= MaxFailedAttempts {
-		// 锁定账户
-		lockKey := fmt.Sprintf("auth:locked:%s", email)
-		m.redis.Set(ctx, lockKey, strconv.FormatInt(count, 10), LockoutDuration)
+	maxFailed, maxTotal, lockoutDur := getLockoutConfig()
 
-		// 清除失败计数
+	// 增加 email 维度总计数
+	totalKey := totalFailedAttemptsKey(email)
+	total, err := m.redis.Incr(ctx, totalKey).Result()
+	if err != nil {
+		return err
+	}
+	if total == 1 {
+		m.redis.Expire(ctx, totalKey, lockoutDur)
+	}
+
+	// 单 IP 超限 或 email 维度总计数超限 都触发锁定
+	if count >= int64(maxFailed) || total >= int64(maxTotal) {
+		lockK := lockedKey(email)
+		m.redis.Set(ctx, lockK, strconv.FormatInt(total, 10), lockoutDur)
 		m.redis.Del(ctx, key)
 	}
 
 	return nil
 }
 
-// IsAccountLocked 检查账户是否被锁定
+// IsAccountLocked 检查账户是否被锁定（全局维度）
 func (m *AccountLockoutManager) IsAccountLocked(email string) (bool, time.Duration, error) {
 	if m.redis == nil {
-		return false, 0, nil // Redis 不可用时不锁定
+		return false, 0, fmt.Errorf("account lockout check unavailable: cannot verify account status")
 	}
 
-	ctx := context.Background()
-	lockKey := fmt.Sprintf("auth:locked:%s", email)
+	ctx, cancel := m.ctx()
+	defer cancel()
+	lockK := lockedKey(email)
 
-	ttl := m.redis.TTL(ctx, lockKey).Val()
+	ttl := m.redis.TTL(ctx, lockK).Val()
 	if ttl > 0 {
 		return true, ttl, nil
 	}
@@ -78,36 +107,47 @@ func (m *AccountLockoutManager) IsAccountLocked(email string) (bool, time.Durati
 	return false, 0, nil
 }
 
-// ClearFailedAttempts 清除失败尝试（登录成功时调用）
-func (m *AccountLockoutManager) ClearFailedAttempts(email string) error {
+// ClearFailedAttempts 清除来自特定 IP 的失败尝试和 email 总计数
+func (m *AccountLockoutManager) ClearFailedAttempts(email, ip string) error {
 	if m.redis == nil {
 		return nil
 	}
 
-	ctx := context.Background()
-	key := fmt.Sprintf("auth:failed_attempts:%s", email)
-	return m.redis.Del(ctx, key).Err()
+	ctx, cancel := m.ctx()
+	defer cancel()
+	key := failedAttemptsKey(email, ip)
+	m.redis.Del(ctx, key)
+
+	// 登录成功时清除 email 维度总计数
+	totalKey := totalFailedAttemptsKey(email)
+	m.redis.Del(ctx, totalKey)
+
+	return nil
 }
 
-// GetRemainingAttempts 获取剩余尝试次数
-func (m *AccountLockoutManager) GetRemainingAttempts(email string) (int, error) {
+// GetRemainingAttempts 获取来自特定 IP 的剩余尝试次数
+func (m *AccountLockoutManager) GetRemainingAttempts(email, ip string) (int, error) {
 	if m.redis == nil {
-		return MaxFailedAttempts, nil // Redis 不可用时返回默认值
+		maxFailed, _, _ := getLockoutConfig()
+		return maxFailed, nil
 	}
 
-	ctx := context.Background()
-	key := fmt.Sprintf("auth:failed_attempts:%s", email)
+	ctx, cancel := m.ctx()
+	defer cancel()
+	key := failedAttemptsKey(email, ip)
 
 	val, err := m.redis.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return MaxFailedAttempts, nil // 没有失败记录
+			maxFailed, _, _ := getLockoutConfig()
+			return maxFailed, nil
 		}
 		return 0, err
 	}
 
 	count, _ := strconv.Atoi(val)
-	remaining := MaxFailedAttempts - count
+	maxFailed, _, _ := getLockoutConfig()
+	remaining := maxFailed - count
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -121,11 +161,18 @@ func (m *AccountLockoutManager) UnlockAccount(email string) error {
 		return nil
 	}
 
-	ctx := context.Background()
-	lockKey := fmt.Sprintf("auth:locked:%s", email)
-	attemptKey := fmt.Sprintf("auth:failed_attempts:%s", email)
+	ctx, cancel := m.ctx()
+	defer cancel()
+	lockK := lockedKey(email)
+	m.redis.Del(ctx, lockK)
+	m.redis.Del(ctx, totalFailedAttemptsKey(email))
 
-	// 清除锁定和失败计数
-	m.redis.Del(ctx, lockKey)
-	return m.redis.Del(ctx, attemptKey).Err()
+	// 使用 SCAN 清除所有 IP 维度的失败计数
+	pattern := fmt.Sprintf("auth:failed_attempts:%s:*", email)
+	iter := m.redis.Scan(ctx, 0, pattern, 100).Iterator()
+	for iter.Next(ctx) {
+		m.redis.Del(ctx, iter.Val())
+	}
+
+	return iter.Err()
 }

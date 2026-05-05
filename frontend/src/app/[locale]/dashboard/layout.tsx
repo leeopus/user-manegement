@@ -1,11 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { useTranslations, useLocale } from 'next-intl'
+import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { LanguageSwitcher } from "@/components/language-switcher"
 import { Link } from "@/i18n/routing"
+import { useAuth } from "@/lib/auth-provider"
 
 export default function DashboardLayout({
   children,
@@ -13,59 +12,10 @@ export default function DashboardLayout({
   children: React.ReactNode
 }) {
   const t = useTranslations('dashboard')
-  const locale = useLocale()
-  const router = useRouter()
-  const [user, setUser] = useState<any>(null)
+  const { user, logout, loading } = useAuth()
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        // 使用API验证身份，而不是依赖localStorage
-        const response = await fetch("http://localhost:8080/api/v1/auth/me", {
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        })
-
-        const data = await response.json()
-        if (data.success && data.data) {
-          setUser(data.data)
-          // 更新localStorage中的用户信息（仅用于显示，不含敏感数据）
-          localStorage.setItem("user", JSON.stringify(data.data))
-        } else {
-          router.push("/login")
-        }
-      } catch (err) {
-        console.error("Auth check failed:", err)
-        router.push("/login")
-      }
-    }
-
-    checkAuth()
-  }, [router])
-
-  const handleLogout = async () => {
-    try {
-      // 调用登出API清除httpOnly cookie
-      await fetch("http://localhost:8080/api/v1/auth/logout", {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      })
-    } catch (err) {
-      console.error("Logout failed:", err)
-    } finally {
-      // 清除本地用户信息
-      localStorage.removeItem("user")
-      router.push("/login")
-    }
-  }
-
-  if (!user) {
-    return <div>{t('loading', { fallback: 'Loading...' })}</div>
+  if (loading || !user) {
+    return <div className="min-h-screen flex items-center justify-center">{t('loading', { fallback: 'Loading...' })}</div>
   }
 
   return (
@@ -77,9 +27,9 @@ export default function DashboardLayout({
           <div className="flex items-center gap-4">
             <LanguageSwitcher />
             <span className="text-sm text-gray-600">
-              {t('welcome')}{user.Username || user.Email}
+              {t('welcome')}{user.username || user.email}
             </span>
-            <Button variant="outline" size="sm" onClick={handleLogout}>
+            <Button variant="outline" size="sm" onClick={logout}>
               {t('logout')}
             </Button>
           </div>

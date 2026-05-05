@@ -40,6 +40,9 @@ func Initialize(level string) error {
 		return err
 	}
 
+	// 替换全局 logger，使 zap.L() 全局可用
+	zap.ReplaceGlobals(Logger)
+
 	return nil
 }
 

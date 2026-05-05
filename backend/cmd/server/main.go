@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -15,7 +16,10 @@ import (
 	"github.com/user-system/backend/internal/handler"
 	"github.com/user-system/backend/internal/middleware"
 	"github.com/user-system/backend/internal/repository"
+	"github.com/user-system/backend/pkg/auth"
 	"github.com/user-system/backend/internal/service"
+	"github.com/user-system/backend/pkg/audit"
+	"github.com/user-system/backend/pkg/logger"
 	"github.com/user-system/backend/pkg/redis"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
@@ -23,115 +27,243 @@ import (
 )
 
 func main() {
-	// 全局错误恢复机制
+	// Bootstrap logger first with a safe default, then reconfigure after loading config
+	_ = logger.Initialize("info")
+	defer logger.Logger.Sync()
+
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Recovered from panic: %v", r)
+			zap.L().Error("Recovered from panic", zap.Any("panic", r))
 		}
 	}()
 
-	// Load configuration
 	if err := config.Load(".env"); err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		zap.L().Fatal("Failed to load config", zap.Error(err))
 	}
 
-	// Initialize logger
 	cfg := config.Get()
-	_ = cfg
 
-	// Connect to Redis
+	logLevel := "info"
+	if cfg.Server.GinMode == "debug" {
+		logLevel = "debug"
+	}
+	if err := logger.Initialize(logLevel); err != nil {
+		zap.L().Fatal("Failed to initialize logger", zap.Error(err))
+	}
+
 	if err := redis.InitRedis(cfg.Redis.URL); err != nil {
-		log.Printf("Warning: Failed to connect to Redis: %v", err)
-		log.Println("Rate limiting will be disabled")
+		zap.L().Warn("Failed to connect to Redis, rate limiting will be disabled", zap.Error(err))
 	}
 	defer redis.Close()
 
-	// Connect to database
 	db, err := gorm.Open(postgres.Open(cfg.Database.URL), &gorm.Config{})
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		zap.L().Fatal("Failed to connect to database", zap.Error(err))
 	}
 
-	// 配置数据库连接池
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatalf("Failed to get database connection: %v", err)
+		zap.L().Fatal("Failed to get database connection", zap.Error(err))
 	}
 
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	sqlDB.SetMaxIdleConns(cfg.GetIntEnv("DB_MAX_IDLE_CONNS", 10))
+	sqlDB.SetMaxOpenConns(cfg.GetIntEnv("DB_MAX_OPEN_CONNS", 100))
+	sqlDB.SetConnMaxLifetime(time.Duration(cfg.GetIntEnv("DB_CONN_MAX_LIFETIME_MIN", 60)) * time.Minute)
+	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.GetIntEnv("DB_CONN_MAX_IDLE_MIN", 10)) * time.Minute)
 
-	log.Println("Database connected successfully")
+	zap.L().Info("Database connected successfully")
 
-	// Auto migrate
-	if err := db.AutoMigrate(
-		&repository.User{},
-		&repository.Role{},
-		&repository.Permission{},
-		&repository.UserRole{},
-		&repository.RolePermission{},
-		&repository.OAuthApplication{},
-		&repository.OAuthToken{},
-		&repository.AuditLog{},
-		&repository.PasswordResetToken{},
-	); err != nil {
-		zap.L().Fatal("Failed to migrate database")
+	if os.Getenv("AUTO_MIGRATE") == "true" {
+		if err := db.AutoMigrate(
+			&repository.User{},
+			&repository.Role{},
+			&repository.Permission{},
+			&repository.UserRole{},
+			&repository.RolePermission{},
+			&repository.OAuthApplication{},
+			&repository.OAuthToken{},
+			&repository.AuditLog{},
+			&repository.PasswordResetToken{},
+			&repository.PasswordHistory{},
+		); err != nil {
+			zap.L().Fatal("Failed to migrate database", zap.Error(err))
+		}
+		zap.L().Info("Database migration completed")
+	} else {
+		zap.L().Info("AutoMigrate skipped (set AUTO_MIGRATE=true to enable)")
 	}
 
-	zap.L().Info("Database migration completed")
-
-	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
 	roleRepo := repository.NewRoleRepository(db)
 	permissionRepo := repository.NewPermissionRepository(db)
 	oauthAppRepo := repository.NewOAuthApplicationRepository(db)
 	oauthTokenRepo := repository.NewOAuthTokenRepository(db)
-	auditLogRepo := repository.NewAuditLogRepository(db)
+	asyncAuditRepo := audit.NewAsyncAuditLogRepository(repository.NewAuditLogRepository(db))
+	auditLogRepo := asyncAuditRepo // implements repository.AuditLogRepository
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
+	passwordHistoryRepo := repository.NewPasswordHistoryRepository(db)
 
-	// Initialize services
 	smtpConfig := email.GetSMTPConfig()
 	var emailService email.EmailService
 	if smtpConfig.Host != "" && smtpConfig.Username != "" {
-		fmt.Println("Using SMTP email service")
+		zap.L().Info("Using SMTP email service")
 		emailService = email.NewSMTPEmailService(smtpConfig)
 	} else {
-		fmt.Println("Using development email service (console output)")
+		zap.L().Info("Using development email service (console output)")
 		emailService = email.NewDevelopmentEmailService()
 	}
 
-	authService := service.NewAuthService(userRepo, auditLogRepo)
-	userService := service.NewUserService(userRepo, roleRepo, auditLogRepo)
-	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogRepo)
-	permissionService := service.NewPermissionService(permissionRepo, auditLogRepo)
-	oauthService := service.NewOAuthService(oauthAppRepo, oauthTokenRepo, userRepo, auditLogRepo)
-	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, auditLogRepo, emailService, cfg.Frontend.URL)
+	// 统一创建共享依赖，避免重复实例化
+	auditLogger := service.NewAuditLogger(auditLogRepo)
+	rbacCache := auth.NewRBACCacheManager(redis.Client)
+	blacklistMgr := auth.NewTokenBlacklistManager(redis.Client)
+	refreshTokenMgr := auth.NewRefreshTokenManager(redis.Client)
 
-	// Initialize handlers
+	authService := service.NewAuthService(userRepo, auditLogger, redis.Client, blacklistMgr, refreshTokenMgr)
+	userService := service.NewUserService(userRepo, roleRepo, auditLogger, rbacCache, blacklistMgr, refreshTokenMgr)
+	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogger, rbacCache)
+	permissionService := service.NewPermissionService(permissionRepo, auditLogger, rbacCache)
+	oauthService := service.NewOAuthService(oauthAppRepo, oauthTokenRepo, userRepo, auditLogger, redis.Client, blacklistMgr)
+	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr)
+
+	rbacCfg := middleware.RBACConfig{
+		UserRepo:     userRepo,
+		RedisClient:  redis.Client,
+		BlacklistMgr: blacklistMgr,
+	}
+
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	roleHandler := handler.NewRoleHandler(roleService)
 	permissionHandler := handler.NewPermissionHandler(permissionService)
 	oauthHandler := handler.NewOAuthHandler(oauthService)
-	csrfHandler := handler.NewCSRFHandler()
+	csrfHandler := handler.NewCSRFHandler(redis.Client)
 	passwordHandler := handler.NewPasswordHandler(passwordService)
 
-	// Setup Gin
 	if cfg.Server.GinMode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	r := gin.New()
+
+	// 仅信任本地代理，防止 X-Forwarded-For 伪造绕过限流
+	if err := r.SetTrustedProxies(nil); err != nil {
+		zap.L().Warn("Failed to set trusted proxies", zap.Error(err))
+	}
+
+	r.Use(middleware.RequestID())
 	r.Use(middleware.Recovery(zap.L()))
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
+	r.Use(middleware.BodyLimit())
+	r.Use(middleware.Timeout(30 * time.Second))
 
-	// Health check（包含依赖检查）
-	r.GET("/health", func(c *gin.Context) {
+	// 健康检查：生产环境限制为内部访问
+	r.GET("/health", healthCheck(sqlDB))
+
+	r.GET("/api/csrf-token", middleware.CSRFTokenRateLimit(redis.Client), csrfHandler.GetToken)
+
+	v1 := r.Group("/api/v1")
+	v1.Use(middleware.APIRateLimit(redis.Client))
+	{
+		auth := v1.Group("/auth")
+		auth.Use(middleware.CSRF(redis.Client))
+		{
+			auth.POST("/register", middleware.RegisterRateLimit(redis.Client), authHandler.Register)
+			auth.POST("/login", middleware.LoginRateLimit(redis.Client), authHandler.Login)
+			auth.POST("/logout", middleware.Auth(blacklistMgr), authHandler.Logout)
+			auth.POST("/refresh", middleware.CSRF(redis.Client), middleware.RefreshRateLimit(redis.Client), authHandler.RefreshToken)
+			auth.GET("/me", middleware.Auth(blacklistMgr), authHandler.GetCurrentUser)
+		}
+
+		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.RequestReset)
+		v1.POST("/auth/password/reset", middleware.CSRF(redis.Client), passwordHandler.ResetPassword)
+		v1.POST("/auth/password/validate-token", middleware.PasswordResetRateLimit(redis.Client), passwordHandler.ValidateToken)
+
+		users := v1.Group("/users")
+		users.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermUserRead))
+		{
+			users.GET("", userHandler.ListUsers)
+			users.GET("/:id", userHandler.GetUser)
+			users.POST("", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.CreateUser)
+			users.PUT("/:id", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.UpdateUser)
+			users.DELETE("/:id", middleware.RequirePermission(rbacCfg, service.PermUserDelete), userHandler.DeleteUser)
+		}
+
+		roles := v1.Group("/roles")
+		roles.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermRoleManage))
+		{
+			roles.GET("", roleHandler.ListRoles)
+			roles.GET("/:id", roleHandler.GetRole)
+			roles.POST("", roleHandler.CreateRole)
+			roles.PUT("/:id", roleHandler.UpdateRole)
+			roles.DELETE("/:id", roleHandler.DeleteRole)
+		}
+
+		permissions := v1.Group("/permissions")
+		permissions.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermPermissionManage))
+		{
+			permissions.GET("", permissionHandler.ListPermissions)
+			permissions.GET("/:id", permissionHandler.GetPermission)
+			permissions.POST("", permissionHandler.CreatePermission)
+			permissions.PUT("/:id", permissionHandler.UpdatePermission)
+			permissions.DELETE("/:id", permissionHandler.DeletePermission)
+		}
+
+		oauth := v1.Group("/oauth")
+		{
+			oauth.POST("/authorize", middleware.Auth(blacklistMgr), oauthHandler.Authorize)
+			oauth.POST("/token", middleware.CSRF(redis.Client), middleware.OAuthTokenRateLimit(redis.Client), oauthHandler.Token)
+			oauth.GET("/userinfo", middleware.OAuthAuth(blacklistMgr), oauthHandler.Userinfo)
+		}
+
+		oauthApps := v1.Group("/oauth/applications")
+		oauthApps.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermOAuthManage))
+		{
+			oauthApps.GET("", oauthHandler.ListApplications)
+			oauthApps.GET("/:id", oauthHandler.GetApplication)
+			oauthApps.POST("", oauthHandler.CreateApplication)
+			oauthApps.PUT("/:id", oauthHandler.UpdateApplication)
+			oauthApps.DELETE("/:id", oauthHandler.DeleteApplication)
+		}
+	}
+
+	addr := fmt.Sprintf(":%s", cfg.Server.Port)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
+	}
+
+	go func() {
+		zap.L().Info("Server starting", zap.String("port", cfg.Server.Port))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			zap.L().Fatal("Failed to start server", zap.Error(err))
+		}
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+
+	zap.L().Info("Shutting down server...")
+
+	// 优雅关闭审计日志队列
+	asyncAuditRepo.Shutdown(5 * time.Second)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		zap.L().Fatal("Server forced to shutdown", zap.Error(err))
+	}
+
+	zap.L().Info("Server exited gracefully")
+}
+
+// healthCheck 返回健康检查 handler
+func healthCheck(sqlDB *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		status := gin.H{"status": "ok"}
 
-		// 检查数据库
 		if sqlDB != nil {
 			if err := sqlDB.Ping(); err != nil {
 				status["database"] = "unhealthy"
@@ -141,7 +273,6 @@ func main() {
 			}
 		}
 
-		// 检查 Redis
 		if redis.Client != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -160,115 +291,5 @@ func main() {
 			httpStatus = 503
 		}
 		c.JSON(httpStatus, status)
-	})
-
-	// CSRF token endpoint (no auth required)
-	r.GET("/api/csrf-token", csrfHandler.GetToken)
-
-	// API routes
-	v1 := r.Group("/api/v1")
-	{
-		// Auth routes with CSRF protection
-		auth := v1.Group("/auth")
-		auth.Use(middleware.CSRF())
-		{
-			auth.POST("/register", middleware.RegisterRateLimit(redis.Client), authHandler.Register)
-			auth.POST("/login", middleware.LoginRateLimit(redis.Client), authHandler.Login)
-			auth.POST("/logout", authHandler.Logout)
-			auth.POST("/refresh", authHandler.RefreshToken)
-			auth.GET("/me", middleware.Auth(), authHandler.GetCurrentUser)
-		}
-
-		// Password reset routes (no CSRF protection - users don't have valid sessions)
-		v1.POST("/auth/password/reset-request", passwordHandler.RequestReset)
-		v1.POST("/auth/password/reset", passwordHandler.ResetPassword)
-		v1.POST("/auth/password/validate-token", passwordHandler.ValidateToken)
-
-		// User routes (protected)
-		users := v1.Group("/users")
-		users.Use(middleware.Auth())
-		{
-			users.GET("", userHandler.ListUsers)
-			users.GET("/:id", userHandler.GetUser)
-		}
-		usersAdmin := v1.Group("/users")
-		usersAdmin.Use(middleware.Auth(), middleware.RequireRole(db, "admin"))
-		{
-			usersAdmin.POST("", userHandler.CreateUser)
-			usersAdmin.PUT("/:id", userHandler.UpdateUser)
-			usersAdmin.DELETE("/:id", userHandler.DeleteUser)
-		}
-
-		// Role routes (protected, admin only)
-		roles := v1.Group("/roles")
-		roles.Use(middleware.Auth(), middleware.RequireRole(db, "admin"))
-		{
-			roles.GET("", roleHandler.ListRoles)
-			roles.GET("/:id", roleHandler.GetRole)
-			roles.POST("", roleHandler.CreateRole)
-			roles.PUT("/:id", roleHandler.UpdateRole)
-			roles.DELETE("/:id", roleHandler.DeleteRole)
-		}
-
-		// Permission routes (protected, admin only)
-		permissions := v1.Group("/permissions")
-		permissions.Use(middleware.Auth(), middleware.RequireRole(db, "admin"))
-		{
-			permissions.GET("", permissionHandler.ListPermissions)
-			permissions.GET("/:id", permissionHandler.GetPermission)
-			permissions.POST("", permissionHandler.CreatePermission)
-			permissions.PUT("/:id", permissionHandler.UpdatePermission)
-			permissions.DELETE("/:id", permissionHandler.DeletePermission)
-		}
-
-		// OAuth routes
-		oauth := v1.Group("/oauth")
-		{
-			oauth.POST("/authorize", oauthHandler.Authorize)
-			oauth.POST("/token", oauthHandler.Token)
-			oauth.GET("/userinfo", middleware.OAuthAuth(), oauthHandler.Userinfo)
-		}
-
-		// OAuth Application management (protected)
-		oauthApps := v1.Group("/oauth/applications")
-		oauthApps.Use(middleware.Auth())
-		{
-			oauthApps.GET("", oauthHandler.ListApplications)
-			oauthApps.GET("/:id", oauthHandler.GetApplication)
-			oauthApps.POST("", oauthHandler.CreateApplication)
-			oauthApps.PUT("/:id", oauthHandler.UpdateApplication)
-			oauthApps.DELETE("/:id", oauthHandler.DeleteApplication)
-		}
 	}
-
-	// Graceful shutdown
-	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
-	}
-
-	// 在 goroutine 中启动服务器
-	go func() {
-		zap.L().Info("Server starting", zap.String("port", cfg.Server.Port))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			zap.L().Fatal("Failed to start server", zap.Error(err))
-		}
-	}()
-
-	// 等待中断信号
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	<-ctx.Done()
-
-	zap.L().Info("Shutting down server...")
-
-	// 给正在处理的请求 10 秒时间完成
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		zap.L().Fatal("Server forced to shutdown", zap.Error(err))
-	}
-
-	zap.L().Info("Server exited gracefully")
 }
