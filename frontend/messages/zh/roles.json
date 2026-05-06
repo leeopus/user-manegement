@@ -28,5 +28,7 @@
   "codePlaceholder": "输入角色编码（如 editor）",
   "descriptionPlaceholder": "输入描述（可选）",
   "save": "保存",
-  "cancel": "取消"
+  "cancel": "取消",
+  "validationNameCodeRequired": "名称和编码为必填",
+  "noPermissionsAvailable": "暂无可用权限"
 }

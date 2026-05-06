@@ -27,5 +27,6 @@
   "copySuccess": "Copied to clipboard",
   "copy": "Copy",
   "save": "Save",
-  "cancel": "Cancel"
+  "cancel": "Cancel",
+  "validationNameRedirectRequired": "Name and redirect URIs are required"
 }

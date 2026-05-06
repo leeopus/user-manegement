@@ -130,7 +130,7 @@ export default function UsersPage() {
   const handleCreate = async () => {
     setFormError(null)
     if (!formUsername.trim() || !formEmail.trim() || !formPassword.trim()) {
-      setFormError("All fields are required")
+      setFormError(t('validationAllRequired'))
       return
     }
     setSubmitting(true)
@@ -158,7 +158,7 @@ export default function UsersPage() {
     if (!editUser) return
     setFormError(null)
     if (!formUsername.trim() || !formEmail.trim()) {
-      setFormError("Username and email are required")
+      setFormError(t('validationUsernameEmailRequired'))
       return
     }
     setSubmitting(true)

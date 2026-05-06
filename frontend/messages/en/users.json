@@ -37,5 +37,7 @@
   "confirmDeleteMessage": "This action cannot be undone. Are you sure?",
   "deleteConfirm": "Delete User",
   "save": "Save",
-  "cancel": "Cancel"
+  "cancel": "Cancel",
+  "validationAllRequired": "All fields are required",
+  "validationUsernameEmailRequired": "Username and email are required"
 }

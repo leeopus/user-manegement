@@ -69,7 +69,7 @@ export default function PermissionsPage() {
   const handleCreate = async () => {
     setFormError(null)
     if (!formName.trim() || !formCode.trim() || !formResource.trim() || !formAction.trim()) {
-      setFormError("Name, code, resource, and action are required")
+      setFormError(t('validationAllRequired'))
       return
     }
     setSubmitting(true)
@@ -103,7 +103,7 @@ export default function PermissionsPage() {
     if (!editPerm) return
     setFormError(null)
     if (!formName.trim() || !formCode.trim() || !formResource.trim() || !formAction.trim()) {
-      setFormError("Name, code, resource, and action are required")
+      setFormError(t('validationAllRequired'))
       return
     }
     setSubmitting(true)

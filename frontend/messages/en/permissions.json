@@ -26,5 +26,6 @@
   "actionPlaceholder": "Enter action (e.g. write)",
   "descriptionPlaceholder": "Enter description (optional)",
   "save": "Save",
-  "cancel": "Cancel"
+  "cancel": "Cancel",
+  "validationAllRequired": "Name, code, resource, and action are required"
 }

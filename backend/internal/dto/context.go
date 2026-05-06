@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/config"
 )
 
 // AuditContext 携带请求级别的审计上下文信息
@@ -50,6 +51,11 @@ func SessionFingerprint(c *gin.Context) string {
 	sessionID = hex.EncodeToString(b)
 
 	// 设置 HttpOnly, SameSite=Strict cookie
+	cookieSecure := false
+	if cfg := config.Get(); cfg != nil && cfg.Security.CookieSecure {
+		cookieSecure = true
+	}
+
 	c.SetSameSite(0) // http.SameSiteDefaultMode
 	c.SetCookie(
 		csrfSessionCookie,
@@ -57,8 +63,8 @@ func SessionFingerprint(c *gin.Context) string {
 		86400, // 24 小时
 		"/",
 		"",
-		false, // Secure=false: CSRF cookie 无需 HTTPS（CSRF 保护不依赖 HTTPS）
-		true,  // HttpOnly: JavaScript 无法读取
+		cookieSecure,
+		true, // HttpOnly: JavaScript 无法读取
 	)
 
 	return sessionID

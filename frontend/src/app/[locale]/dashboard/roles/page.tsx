@@ -72,7 +72,7 @@ export default function RolesPage() {
   const handleCreate = async () => {
     setFormError(null)
     if (!formName.trim() || !formCode.trim()) {
-      setFormError("Name and code are required")
+      setFormError(t('validationNameCodeRequired'))
       return
     }
     setSubmitting(true)
@@ -100,7 +100,7 @@ export default function RolesPage() {
     if (!editRole) return
     setFormError(null)
     if (!formName.trim() || !formCode.trim()) {
-      setFormError("Name and code are required")
+      setFormError(t('validationNameCodeRequired'))
       return
     }
     setSubmitting(true)
@@ -336,7 +336,7 @@ export default function RolesPage() {
                 </label>
               )
             })}
-            {allPermissions.length === 0 && <p className="text-sm text-gray-500 text-center py-4">No permissions available</p>}
+            {allPermissions.length === 0 && <p className="text-sm text-gray-500 text-center py-4">{t('noPermissionsAvailable')}</p>}
           </div>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>{t('cancel')}</DialogClose>

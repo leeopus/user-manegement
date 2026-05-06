@@ -28,5 +28,7 @@
   "codePlaceholder": "Enter role code (e.g. editor)",
   "descriptionPlaceholder": "Enter description (optional)",
   "save": "Save",
-  "cancel": "Cancel"
+  "cancel": "Cancel",
+  "validationNameCodeRequired": "Name and code are required",
+  "noPermissionsAvailable": "No permissions available"
 }

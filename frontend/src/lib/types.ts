@@ -138,10 +138,13 @@ export interface OAuthApplication {
   id: number
   name: string
   client_id: string
-  client_secret?: string
   redirect_uris: string
   scopes?: string
   created_at: string
+}
+
+export interface OAuthApplicationCreateResult extends OAuthApplication {
+  client_secret: string
 }
 
 export interface AuditLog {

@@ -16,7 +16,7 @@ import { api } from "@/lib/api"
 import { useAuth, hasPermission } from "@/lib/auth-provider"
 import { useErrorHandler } from "@/lib/use-error-handler"
 import { AlertCircle, Copy, Check } from "lucide-react"
-import type { OAuthApplication } from "@/lib/types"
+import type { OAuthApplication, OAuthApplicationCreateResult } from "@/lib/types"
 
 export default function ApplicationsPage() {
   const t = useTranslations('applications')
@@ -70,7 +70,7 @@ export default function ApplicationsPage() {
   const handleCreate = async () => {
     setFormError(null)
     if (!formName.trim() || !formRedirectUris.trim()) {
-      setFormError("Name and redirect URIs are required")
+      setFormError(t('validationNameRedirectRequired'))
       return
     }
     setSubmitting(true)
@@ -102,7 +102,7 @@ export default function ApplicationsPage() {
     if (!editApp) return
     setFormError(null)
     if (!formName.trim() || !formRedirectUris.trim()) {
-      setFormError("Name and redirect URIs are required")
+      setFormError(t('validationNameRedirectRequired'))
       return
     }
     setSubmitting(true)

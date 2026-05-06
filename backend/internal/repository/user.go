@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -152,7 +153,10 @@ func (r *userRepository) List(offset, limit int, filters UserFilters) ([]User, i
 		query = query.Where("status = ?", filters.Status)
 	}
 	if filters.Search != "" {
-		search := "%" + filters.Search + "%"
+		search := filters.Search
+		search = strings.ReplaceAll(search, "%", "\\%")
+		search = strings.ReplaceAll(search, "_", "\\_")
+		search = "%" + search + "%"
 		query = query.Where("username LIKE ? OR email LIKE ?", search, search)
 	}
 	if filters.RoleID > 0 {

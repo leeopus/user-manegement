@@ -26,5 +26,6 @@
   "actionPlaceholder": "输入操作名（如 write）",
   "descriptionPlaceholder": "输入描述（可选）",
   "save": "保存",
-  "cancel": "取消"
+  "cancel": "取消",
+  "validationAllRequired": "名称、编码、资源和操作均为必填"
 }

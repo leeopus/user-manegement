@@ -83,7 +83,7 @@ func (m *Manager) GenerateToken(sessionID string) (string, error) {
 	return token, nil
 }
 
-// ValidateToken 验证 CSRF token（原子读取+校验+删除）
+// ValidateToken 验证 CSRF token（仅读取不删除，Token 在 TTL 内可复用）
 func (m *Manager) ValidateToken(token, sessionID string) error {
 	if token == "" {
 		return ErrInvalidToken
@@ -98,26 +98,12 @@ func (m *Manager) ValidateToken(token, sessionID string) error {
 
 	key := fmt.Sprintf("%s%s", csrfTokenPrefix, tokenHash(token))
 
-	script := redis.NewScript(`
-		local val = redis.call("GET", KEYS[1])
-		if val == false then
-			return 0
-		end
-		redis.call("DEL", KEYS[1])
-		return val
-	`)
-
-	result, err := script.Run(ctx, m.redis, []string{key}).Result()
+	storedSession, err := m.redis.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return ErrInvalidToken
 		}
 		return err
-	}
-
-	storedSession, ok := result.(string)
-	if !ok || storedSession == "" {
-		return ErrInvalidToken
 	}
 
 	if storedSession != sessionID {

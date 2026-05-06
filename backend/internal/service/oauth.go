@@ -129,6 +129,13 @@ func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scop
 		return "", apperrors.ErrOAuthInvalidRedirectURI
 	}
 
+	// 重定向时再次校验目标地址的 DNS 解析，防止 DNS 重绑定攻击
+	if err := validateRedirectURIIsPublic(redirectURI); err != nil {
+		return "", apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
+			"reason": err.Error(),
+		})
+	}
+
 	// 验证请求的 scope 是否在应用注册的 scopes 范围内
 	if scope == "" {
 		scope = "read" // 默认 scope

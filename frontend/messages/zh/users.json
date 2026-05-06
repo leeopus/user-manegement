@@ -37,5 +37,7 @@
   "confirmDeleteMessage": "此操作不可撤销，确认继续？",
   "deleteConfirm": "删除用户",
   "save": "保存",
-  "cancel": "取消"
+  "cancel": "取消",
+  "validationAllRequired": "所有字段均为必填",
+  "validationUsernameEmailRequired": "用户名和邮箱为必填"
 }

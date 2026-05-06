@@ -10,6 +10,7 @@ import {
   Role,
   Permission,
   OAuthApplication,
+  OAuthApplicationCreateResult,
   AuditLog,
   CreateUserRequest,
   UpdateUserRequest,
@@ -84,10 +85,17 @@ async function refreshAccessToken(): Promise<boolean> {
       const baseURL = API_BASE
       const url = baseURL ? `${baseURL}/api/v1/auth/refresh` : '/api/v1/auth/refresh'
 
+      let headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      try {
+        headers = (await addCSRFToHeaders(headers)) as Record<string, string>
+      } catch {
+        // CSRF token 获取失败，仍然尝试刷新（httpOnly cookie 本身提供同站保护）
+      }
+
       const response = await fetch(url, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
       })
 
       const data = await response.json()
@@ -535,8 +543,8 @@ class APIClient {
     return response.data
   }
 
-  async createApplication(data: CreateOAuthAppRequest): Promise<OAuthApplication> {
-    const response = await this.request<OAuthApplication>('/api/v1/oauth/applications', {
+  async createApplication(data: CreateOAuthAppRequest): Promise<OAuthApplicationCreateResult> {
+    const response = await this.request<OAuthApplicationCreateResult>('/api/v1/oauth/applications', {
       method: 'POST',
       body: JSON.stringify(data),
     })

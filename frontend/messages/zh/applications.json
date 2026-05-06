@@ -27,5 +27,6 @@
   "copySuccess": "已复制到剪贴板",
   "copy": "复制",
   "save": "保存",
-  "cancel": "取消"
+  "cancel": "取消",
+  "validationNameRedirectRequired": "名称和回调地址为必填"
 }

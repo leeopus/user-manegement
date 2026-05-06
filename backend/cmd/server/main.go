@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -152,9 +153,19 @@ func main() {
 
 	r := gin.New()
 
-	// 仅信任本地代理，防止 X-Forwarded-For 伪造绕过限流
-	if err := r.SetTrustedProxies(nil); err != nil {
-		zap.L().Warn("Failed to set trusted proxies", zap.Error(err))
+	if trustedProxies := os.Getenv("TRUSTED_PROXIES"); trustedProxies != "" {
+		proxies := strings.Split(trustedProxies, ",")
+		for i := range proxies {
+			proxies[i] = strings.TrimSpace(proxies[i])
+		}
+		if err := r.SetTrustedProxies(proxies); err != nil {
+			zap.L().Warn("Failed to set trusted proxies", zap.Error(err))
+		}
+		zap.L().Info("Trusted proxies configured", zap.Strings("proxies", proxies))
+	} else {
+		if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
+			zap.L().Warn("Failed to set trusted proxies", zap.Error(err))
+		}
 	}
 
 	r.Use(middleware.RequestID())
