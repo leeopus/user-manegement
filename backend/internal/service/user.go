@@ -15,8 +15,8 @@ import (
 
 type UserService interface {
 	CreateUser(username, email, password string, auditCtx dto.AuditContext) (*repository.User, error)
-	GetUser(id uint, currentUserID uint) (*repository.User, error)
-	UpdateUser(id uint, username, email string, currentUserID uint, auditCtx dto.AuditContext) (*repository.User, error)
+	GetUser(id uint, currentUserID uint, userRoles []auth.RoleData) (*repository.User, error)
+	UpdateUser(id uint, username, email string, currentUserID uint, userRoles []auth.RoleData, auditCtx dto.AuditContext) (*repository.User, error)
 	UpdateUserStatus(id, currentUserID uint, status string, auditCtx dto.AuditContext) error
 	DeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error
 	HardDeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error
@@ -111,15 +111,15 @@ func (s *userService) CreateUser(username, email, password string, auditCtx dto.
 	return user, nil
 }
 
-func (s *userService) GetUser(id uint, currentUserID uint) (*repository.User, error) {
-	if !s.isOwnerOrAdmin(id, currentUserID) {
+func (s *userService) GetUser(id uint, currentUserID uint, userRoles []auth.RoleData) (*repository.User, error) {
+	if !s.isOwnerOrAdmin(id, currentUserID, userRoles) {
 		return nil, apperrors.ErrUserNotFound
 	}
 	return s.userRepo.FindByID(id)
 }
 
-func (s *userService) UpdateUser(id uint, username, email string, currentUserID uint, auditCtx dto.AuditContext) (*repository.User, error) {
-	if !s.isOwnerOrAdmin(id, currentUserID) {
+func (s *userService) UpdateUser(id uint, username, email string, currentUserID uint, userRoles []auth.RoleData, auditCtx dto.AuditContext) (*repository.User, error) {
+	if !s.isOwnerOrAdmin(id, currentUserID, userRoles) {
 		return nil, apperrors.ErrUserNotFound
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
@@ -209,10 +209,10 @@ func (s *userService) UpdateUserStatus(id, currentUserID uint, status string, au
 
 	if status == StatusDisabled {
 		if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
-			zap.L().Warn("Failed to revoke refresh tokens on disable", zap.Uint("user_id", id), zap.Error(err))
+			zap.L().Error("CRITICAL: failed to revoke refresh tokens on user disable, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 		}
 		if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
-			zap.L().Warn("Failed to blacklist user tokens on disable", zap.Uint("user_id", id), zap.Error(err))
+			zap.L().Error("CRITICAL: failed to blacklist user tokens on user disable, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 		}
 	}
 
@@ -265,10 +265,10 @@ func (s *userService) DeleteUser(id uint, currentUserID uint, auditCtx dto.Audit
 	}
 
 	if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
-		zap.L().Warn("Failed to revoke refresh tokens during soft delete", zap.Uint("user_id", id), zap.Error(err))
+		zap.L().Error("CRITICAL: failed to revoke refresh tokens during soft delete, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 	}
 	if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
-		zap.L().Warn("Failed to blacklist user tokens during soft delete", zap.Uint("user_id", id), zap.Error(err))
+		zap.L().Error("CRITICAL: failed to blacklist user tokens during soft delete, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 	}
 	_ = s.rbacCache.InvalidateUserRoles(id)
 
@@ -304,10 +304,10 @@ func (s *userService) HardDeleteUser(id uint, currentUserID uint, auditCtx dto.A
 		zap.L().Error("CRITICAL: failed to blacklist hard-deleted user, access may remain valid", zap.Uint("user_id", id), zap.Error(err))
 	}
 	if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
-		zap.L().Warn("Failed to revoke refresh tokens during hard delete", zap.Uint("user_id", id), zap.Error(err))
+		zap.L().Error("CRITICAL: failed to revoke refresh tokens during hard delete, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 	}
 	if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
-		zap.L().Warn("Failed to blacklist user tokens during hard delete", zap.Uint("user_id", id), zap.Error(err))
+		zap.L().Error("CRITICAL: failed to blacklist user tokens during hard delete, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 	}
 	_ = s.rbacCache.InvalidateUserRoles(id)
 
@@ -389,38 +389,39 @@ func (s *userService) RemoveRole(userID, roleID uint, auditCtx dto.AuditContext)
 	return nil
 }
 
-// isOwnerOrAdmin checks if currentUserID is the resource owner or has admin role / user management permission.
-func (s *userService) isOwnerOrAdmin(resourceUserID, currentUserID uint) bool {
+// isOwnerOrAdmin checks if currentUserID is the resource owner or has admin/user-management permission.
+// userRoles is provided by the RBAC middleware from gin context, avoiding redundant Redis/DB queries.
+func (s *userService) isOwnerOrAdmin(resourceUserID, currentUserID uint, userRoles []auth.RoleData) bool {
 	if resourceUserID == currentUserID {
 		return true
 	}
 
-	// 先查 Redis 缓存
-	roles, err := s.rbacCache.GetUserRoles(currentUserID)
-	if err == nil && roles != nil {
-		return s.hasAdminOrUserManagePermission(roles)
+	if userRoles != nil {
+		return hasAdminOrUserManagePermission(userRoles)
 	}
 
-	// 缓存 miss：回源 DB 查询
+	// Fallback: 仅当中间件未注入角色时回源查询
+	roles, err := s.rbacCache.GetUserRoles(currentUserID)
+	if err == nil && roles != nil {
+		return hasAdminOrUserManagePermission(roles)
+	}
+
 	dbRoles, dbErr := s.userRepo.GetUserRoles(currentUserID)
 	if dbErr != nil {
 		return false
 	}
-
+	converted := make([]auth.RoleData, 0, len(dbRoles))
 	for _, r := range dbRoles {
-		if r.Code == RoleAdmin {
-			return true
-		}
+		perms := make([]auth.PermissionData, 0, len(r.Permissions))
 		for _, p := range r.Permissions {
-			if p.Code == "user:manage" || p.Code == "user:write" {
-				return true
-			}
+			perms = append(perms, auth.PermissionData{ID: p.ID, Code: p.Code, Name: p.Name})
 		}
+		converted = append(converted, auth.RoleData{ID: r.ID, Code: r.Code, Name: r.Name, Permissions: perms})
 	}
-	return false
+	return hasAdminOrUserManagePermission(converted)
 }
 
-func (s *userService) hasAdminOrUserManagePermission(roles []auth.RoleData) bool {
+func hasAdminOrUserManagePermission(roles []auth.RoleData) bool {
 	for _, role := range roles {
 		if role.Code == RoleAdmin {
 			return true

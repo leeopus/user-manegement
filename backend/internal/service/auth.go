@@ -78,25 +78,20 @@ func NewAuthService(userRepo repository.UserRepository, passwordHistoryRepo repo
 func (s *authService) Register(email, password string, auditCtx dto.AuditContext) (*repository.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 
-	// 先执行 dummy bcrypt 工作，确保所有分支（包括验证失败的分支）耗时一致
-	_ = utils.CheckPassword(password, getDummyHash())
-
+	// 输入验证直接返回错误，依赖 RegisterRateLimit 防止邮箱枚举
 	if err := utils.ValidateEmail(email); err != nil {
-		_, _ = utils.HashPassword("constant-time-dummy-value")
 		return nil, apperrors.ErrEmailInvalid.WithDetails(map[string]interface{}{
 			"reason": err.Error(),
 		})
 	}
 
 	if _, err := utils.ValidatePassword(password, ""); err != nil {
-		_, _ = utils.HashPassword("constant-time-dummy-value")
 		return nil, apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
 			"reason": err.Error(),
 		})
 	}
 
 	if utils.IsDisposableEmail(email) {
-		_, _ = utils.HashPassword("constant-time-dummy-value")
 		return nil, apperrors.ErrDisposableEmail
 	}
 
@@ -105,14 +100,10 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 		emailExists = true
 	}
 
-	// 无论邮箱是否存在，都执行等量 bcrypt 工作保持恒定时间，防止时序侧信道枚举
-	// 两条路径各执行 1 次 CheckPassword + 1 次 HashPassword，总耗时一致
-
+	// 无论邮箱是否存在，都执行一次 bcrypt 保持恒定时间，防止时序侧信道枚举
 	if emailExists {
-		// 对齐正常路径的 HashPassword 调用
 		_, _ = utils.HashPassword("constant-time-dummy-value")
 		// 不返回"邮箱已存在"错误，防止邮箱枚举攻击
-		// 返回通用成功消息，与正常注册一致
 		return nil, apperrors.ErrRegisterSilent.WithDetails(map[string]interface{}{
 			"hint": "if_this_email_is_available_you_will_receive_confirmation",
 		})
@@ -469,8 +460,14 @@ func (s *authService) ChangePassword(userID uint, currentPassword, newPassword s
 	_ = s.passwordHistoryRepo.CleanupOld(user.ID, 5)
 
 	// 密码修改后吊销所有已有 token，强制重新登录
-	_ = s.refreshTokenMgr.RevokeAll(user.ID)
-	_ = s.blacklistMgr.RevokeAllUserTokens(user.ID)
+	if err := s.refreshTokenMgr.RevokeAll(user.ID); err != nil {
+		zap.L().Error("CRITICAL: failed to revoke refresh tokens after password change, old sessions may remain active",
+			zap.Uint("user_id", user.ID), zap.Error(err))
+	}
+	if err := s.blacklistMgr.RevokeAllUserTokens(user.ID); err != nil {
+		zap.L().Error("CRITICAL: failed to blacklist user tokens after password change, old sessions may remain active",
+			zap.Uint("user_id", user.ID), zap.Error(err))
+	}
 
 	s.auditLogger.Log(&auditCtx, "change_password", "user", map[string]interface{}{
 		"user_id": user.ID,

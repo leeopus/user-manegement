@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
@@ -33,6 +31,14 @@ type CreatePermissionRequest struct {
 	Description string `json:"description"`
 }
 
+type UpdatePermissionRequest struct {
+	Name        string `json:"name" binding:"required"`
+	Code        string `json:"code" binding:"required"`
+	Resource    string `json:"resource" binding:"required"`
+	Action      string `json:"action" binding:"required"`
+	Description string `json:"description"`
+}
+
 func (h *permissionHandler) ListPermissions(c *gin.Context) {
 	page, pageSize, offset := response.ParsePagination(c)
 
@@ -56,13 +62,12 @@ func (h *permissionHandler) ListPermissions(c *gin.Context) {
 }
 
 func (h *permissionHandler) GetPermission(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid permission id")
+	id, ok := parseIDParam(c, "id", "permission id")
+	if !ok {
 		return
 	}
 
-	permission, err := h.permissionService.GetPermission(uint(id))
+	permission, err := h.permissionService.GetPermission(id)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -90,20 +95,19 @@ func (h *permissionHandler) CreatePermission(c *gin.Context) {
 }
 
 func (h *permissionHandler) UpdatePermission(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid permission id")
+	id, ok := parseIDParam(c, "id", "permission id")
+	if !ok {
 		return
 	}
 
-	var req CreatePermissionRequest
+	var req UpdatePermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ValidationError(c, err.Error())
 		return
 	}
 
 	permission, err := h.permissionService.UpdatePermission(
-		uint(id), req.Name, req.Code, req.Resource, req.Action, req.Description, getAuditContext(c),
+		id, req.Name, req.Code, req.Resource, req.Action, req.Description, getAuditContext(c),
 	)
 	if err != nil {
 		response.Error(c, err)
@@ -114,13 +118,12 @@ func (h *permissionHandler) UpdatePermission(c *gin.Context) {
 }
 
 func (h *permissionHandler) DeletePermission(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid permission id")
+	id, ok := parseIDParam(c, "id", "permission id")
+	if !ok {
 		return
 	}
 
-	if err := h.permissionService.DeletePermission(uint(id), getAuditContext(c)); err != nil {
+	if err := h.permissionService.DeletePermission(id, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}

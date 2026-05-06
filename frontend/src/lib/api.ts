@@ -29,18 +29,19 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
 const CSRF_REQUIRED_METHODS = ['POST', 'PUT', 'DELETE', 'PATCH']
 const REQUEST_TIMEOUT_MS = 30000
 
-// Token 刷新锁，防止并发刷新
+// Token 刷新锁和重试队列，仅在客户端初始化，避免 SSR 环境下跨请求状态污染
+const isClient = typeof window !== 'undefined'
+
 let isRefreshing = false
 let refreshPromise: Promise<boolean> | null = null
 let lastRefreshAttempt = 0
 const REFRESH_COOLDOWN_MS = 5000
 
-// Retry queue: serializes retry requests after a token refresh to avoid CSRF race conditions
 let retryQueue: Array<() => void> = []
 let isRetrying = false
 
 function processRetryQueue() {
-  if (isRetrying || retryQueue.length === 0) return
+  if (!isClient || isRetrying || retryQueue.length === 0) return
   isRetrying = true
   const next = retryQueue.shift()
   if (next) {
@@ -69,6 +70,8 @@ function getAuthChannel(): BroadcastChannel | null {
 }
 
 async function refreshAccessToken(): Promise<boolean> {
+  if (!isClient) return false
+
   const now = Date.now()
   if (now - lastRefreshAttempt < REFRESH_COOLDOWN_MS) {
     return false

@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
@@ -28,6 +26,12 @@ func NewRoleHandler(roleService service.RoleService) RoleHandler {
 }
 
 type CreateRoleRequest struct {
+	Name        string `json:"name" binding:"required"`
+	Code        string `json:"code" binding:"required"`
+	Description string `json:"description"`
+}
+
+type UpdateRoleRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Code        string `json:"code" binding:"required"`
 	Description string `json:"description"`
@@ -60,13 +64,12 @@ func (h *roleHandler) ListRoles(c *gin.Context) {
 }
 
 func (h *roleHandler) GetRole(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid role id")
+	id, ok := parseIDParam(c, "id", "role id")
+	if !ok {
 		return
 	}
 
-	role, err := h.roleService.GetRole(uint(id))
+	role, err := h.roleService.GetRole(id)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -92,19 +95,18 @@ func (h *roleHandler) CreateRole(c *gin.Context) {
 }
 
 func (h *roleHandler) UpdateRole(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid role id")
+	id, ok := parseIDParam(c, "id", "role id")
+	if !ok {
 		return
 	}
 
-	var req CreateRoleRequest
+	var req UpdateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.ValidationError(c, err.Error())
 		return
 	}
 
-	role, err := h.roleService.UpdateRole(uint(id), req.Name, req.Code, req.Description, getAuditContext(c))
+	role, err := h.roleService.UpdateRole(id, req.Name, req.Code, req.Description, getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -114,13 +116,12 @@ func (h *roleHandler) UpdateRole(c *gin.Context) {
 }
 
 func (h *roleHandler) DeleteRole(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid role id")
+	id, ok := parseIDParam(c, "id", "role id")
+	if !ok {
 		return
 	}
 
-	if err := h.roleService.DeleteRole(uint(id), getAuditContext(c)); err != nil {
+	if err := h.roleService.DeleteRole(id, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -131,9 +132,8 @@ func (h *roleHandler) DeleteRole(c *gin.Context) {
 }
 
 func (h *roleHandler) AssignPermission(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid role id")
+	id, ok := parseIDParam(c, "id", "role id")
+	if !ok {
 		return
 	}
 
@@ -143,7 +143,7 @@ func (h *roleHandler) AssignPermission(c *gin.Context) {
 		return
 	}
 
-	if err := h.roleService.AssignRolePermission(uint(id), req.PermissionID, getAuditContext(c)); err != nil {
+	if err := h.roleService.AssignRolePermission(id, req.PermissionID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -154,19 +154,17 @@ func (h *roleHandler) AssignPermission(c *gin.Context) {
 }
 
 func (h *roleHandler) RemovePermission(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid role id")
+	id, ok := parseIDParam(c, "id", "role id")
+	if !ok {
 		return
 	}
 
-	permissionID, err := strconv.ParseUint(c.Param("permissionId"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid permission id")
+	permissionID, ok := parseIDParam(c, "permissionId", "permission id")
+	if !ok {
 		return
 	}
 
-	if err := h.roleService.RemoveRolePermission(uint(id), uint(permissionID), getAuditContext(c)); err != nil {
+	if err := h.roleService.RemoveRolePermission(id, permissionID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}

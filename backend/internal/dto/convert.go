@@ -120,8 +120,10 @@ func ToAuditLogResponse(log *repository.AuditLog) AuditLogResponse {
 	}
 }
 
-// maskSensitiveDetails 对 details JSON 中的邮箱等敏感字段做脱敏
-// 如 "user@example.com" → "u***@example.com"
+// sensitiveKeyPatterns 匹配 details 中需要脱敏的 key 模式
+var sensitiveKeyPatterns = []string{"email", "target_email", "ip", "last_login_ip"}
+
+// maskSensitiveDetails 对 details JSON 中的邮箱、IP 等敏感字段做脱敏
 func maskSensitiveDetails(details string) string {
 	if details == "" {
 		return details
@@ -132,11 +134,14 @@ func maskSensitiveDetails(details string) string {
 	}
 	for key, val := range m {
 		s, ok := val.(string)
-		if !ok {
+		if !ok || s == "" {
 			continue
 		}
-		if strings.Contains(strings.ToLower(key), "email") && strings.Contains(s, "@") {
+		lowerKey := strings.ToLower(key)
+		if containsAnyPattern(lowerKey, "email") && strings.Contains(s, "@") {
 			m[key] = maskEmail(s)
+		} else if containsAnyPattern(lowerKey, "ip") && isIPv4(s) {
+			m[key] = maskIP(s)
 		}
 	}
 	masked, err := json.Marshal(m)
@@ -144,6 +149,36 @@ func maskSensitiveDetails(details string) string {
 		return details
 	}
 	return string(masked)
+}
+
+func containsAnyPattern(key string, patterns ...string) bool {
+	for _, p := range patterns {
+		if strings.Contains(key, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIPv4(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && c != '.' {
+			return false
+		}
+	}
+	return strings.Contains(s, ".")
+}
+
+// maskIP 将 IPv4 地址脱敏，如 "192.168.1.100" → "192.168.*.*"
+func maskIP(ip string) string {
+	parts := strings.Split(ip, ".")
+	if len(parts) == 4 {
+		parts[2] = "*"
+		parts[3] = "*"
+		return strings.Join(parts, ".")
+	}
+	return ip
 }
 
 // maskEmail 将邮箱脱敏为 a***@domain.com 格式

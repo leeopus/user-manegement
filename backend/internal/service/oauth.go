@@ -20,6 +20,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const dnsResolveTimeout = 3 * time.Second
+
+var dnsResolver = &net.Resolver{}
+
 type OAuthService interface {
 	CreateApplication(name, redirectURIs, scopes string, auditCtx dto.AuditContext) (*repository.OAuthApplication, string, error)
 	GetApplication(id uint) (*repository.OAuthApplication, error)
@@ -439,16 +443,19 @@ func validateRedirectURIIsPublic(rawURI string) error {
 		return nil
 	}
 
-	// DNS 解析后检查实际 IP，防止 DNS 重绑定攻击
-	ips, err := net.LookupIP(host)
+	// DNS 解析后检查实际 IP，防止 DNS 重绑定攻击（带超时，避免慢速 DNS 阻塞 goroutine）
+	resolveCtx, cancel := context.WithTimeout(context.Background(), dnsResolveTimeout)
+	defer cancel()
+
+	addrs, err := dnsResolver.LookupIPAddr(resolveCtx, host)
 	if err != nil {
 		return fmt.Errorf("could not resolve redirect URI host: %s", host)
 	}
-	if len(ips) == 0 {
+	if len(addrs) == 0 {
 		return fmt.Errorf("redirect URI host resolved to no addresses: %s", host)
 	}
-	for _, ip := range ips {
-		if err := checkIPNotInternal(ip, host); err != nil {
+	for _, addr := range addrs {
+		if err := checkIPNotInternal(addr.IP, host); err != nil {
 			return err
 		}
 	}

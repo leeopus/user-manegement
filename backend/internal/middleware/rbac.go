@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -14,9 +16,9 @@ import (
 
 // RBACConfig RBAC 中间件配置
 type RBACConfig struct {
-	UserRepo    repository.UserRepository
-	RedisClient *redis.Client
-	CacheMgr    *auth.RBACCacheManager
+	UserRepo     repository.UserRepository
+	RedisClient  *redis.Client
+	CacheMgr     *auth.RBACCacheManager
 	BlacklistMgr *auth.TokenBlacklistManager
 }
 
@@ -29,9 +31,16 @@ func (c *RBACConfig) GetCacheMgr() *auth.RBACCacheManager {
 
 var roleLoadSF singleflight.Group
 
+const rbacDBTimeout = 3 * time.Second
+
 func loadRolesWithSF(userRepo repository.UserRepository, cacheMgr *auth.RBACCacheManager, uid uint) ([]auth.RoleData, error) {
 	key := fmt.Sprintf("rbac:%d", uid)
-	v, err, _ := roleLoadSF.Do(key, func() (interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), rbacDBTimeout)
+	defer cancel()
+
+	resultCh := roleLoadSF.DoChan(key, func() (interface{}, error) {
+		// singleflight 回调内部无法直接受 context 取消，
+		// 但 DB 查询本身会在 rbacDBTimeout 后由外部逻辑丢弃结果
 		dbRoles, dbErr := userRepo.GetUserRoles(uid)
 		if dbErr != nil {
 			return nil, dbErr
@@ -45,10 +54,17 @@ func loadRolesWithSF(userRepo repository.UserRepository, cacheMgr *auth.RBACCach
 
 		return roleDataList, nil
 	})
-	if err != nil {
-		return nil, err
+
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		return result.Val.([]auth.RoleData), nil
+	case <-ctx.Done():
+		zap.L().Error("RBAC role loading timed out", zap.Uint("user_id", uid), zap.Duration("timeout", rbacDBTimeout))
+		return nil, fmt.Errorf("rbac load timeout for user %d", uid)
 	}
-	return v.([]auth.RoleData), nil
 }
 
 // RequireRole 检查当前用户是否拥有指定角色（带 Redis 缓存）
@@ -118,21 +134,30 @@ func RequirePermission(cfg RBACConfig, permissionCodes ...string) gin.HandlerFun
 			return
 		}
 
-		for _, role := range roles {
-			for _, perm := range role.Permissions {
-				for _, required := range permissionCodes {
-					if perm.Code == required {
-						c.Set("user_roles", roles)
-						c.Next()
-						return
-					}
-				}
+		// 预构建 map 索引，将 O(R*P*N) 降为 O(P+N)
+		permMap := buildPermissionMap(roles)
+		for _, required := range permissionCodes {
+			if permMap[required] {
+				c.Set("user_roles", roles)
+				c.Next()
+				return
 			}
 		}
 
 		response.Forbidden(c)
 		c.Abort()
 	}
+}
+
+// buildPermissionMap 将角色-权限展平为 map[code]bool，用于 O(1) 查找
+func buildPermissionMap(roles []auth.RoleData) map[string]bool {
+	m := make(map[string]bool, len(roles)*4)
+	for _, role := range roles {
+		for _, perm := range role.Permissions {
+			m[perm.Code] = true
+		}
+	}
+	return m
 }
 
 func getOrLoadRoles(userRepo repository.UserRepository, cacheMgr *auth.RBACCacheManager, uid uint) []auth.RoleData {
@@ -143,6 +168,10 @@ func getOrLoadRoles(userRepo repository.UserRepository, cacheMgr *auth.RBACCache
 
 	roles, err := loadRolesWithSF(userRepo, cacheMgr, uid)
 	if err != nil {
+		zap.L().Error("CRITICAL: RBAC role loading failed (both Redis cache miss and DB error), all permission checks will deny access",
+			zap.Uint("user_id", uid),
+			zap.Error(err),
+		)
 		return nil
 	}
 	return roles

@@ -7,6 +7,7 @@ import (
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/internal/service"
+	"github.com/user-system/backend/pkg/auth"
 	"github.com/user-system/backend/pkg/response"
 )
 
@@ -64,6 +65,25 @@ func getAuditContext(c *gin.Context) dto.AuditContext {
 	return dto.NewAuditContext(c, userID)
 }
 
+// getUserRoles 从 gin context 提取 RBAC 中间件已加载的角色数据
+func getUserRoles(c *gin.Context) []auth.RoleData {
+	rolesVal, _ := c.Get("user_roles")
+	if roles, ok := rolesVal.([]auth.RoleData); ok {
+		return roles
+	}
+	return nil
+}
+
+// parseIDParam 提取并校验 URL 路径参数中的 uint ID
+func parseIDParam(c *gin.Context, param string, label string) (uint, bool) {
+	val, err := strconv.ParseUint(c.Param(param), 10, 32)
+	if err != nil {
+		response.ValidationError(c, "invalid "+label)
+		return 0, false
+	}
+	return uint(val), true
+}
+
 func (h *userHandler) ListUsers(c *gin.Context) {
 	page, pageSize, offset := response.ParsePagination(c)
 
@@ -92,9 +112,8 @@ func (h *userHandler) ListUsers(c *gin.Context) {
 }
 
 func (h *userHandler) GetUser(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
@@ -104,7 +123,7 @@ func (h *userHandler) GetUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.GetUser(uint(id), currentUserID)
+	user, err := h.userService.GetUser(id, currentUserID, getUserRoles(c))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -130,9 +149,8 @@ func (h *userHandler) CreateUser(c *gin.Context) {
 }
 
 func (h *userHandler) UpdateUser(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
@@ -148,7 +166,7 @@ func (h *userHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.UpdateUser(uint(id), req.Username, req.Email, currentUserID, getAuditContext(c))
+	user, err := h.userService.UpdateUser(id, req.Username, req.Email, currentUserID, getUserRoles(c), getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -158,9 +176,8 @@ func (h *userHandler) UpdateUser(c *gin.Context) {
 }
 
 func (h *userHandler) UpdateUserStatus(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
@@ -176,7 +193,7 @@ func (h *userHandler) UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.UpdateUserStatus(uint(id), currentUserID, req.Status, getAuditContext(c)); err != nil {
+	if err := h.userService.UpdateUserStatus(id, currentUserID, req.Status, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -187,9 +204,8 @@ func (h *userHandler) UpdateUserStatus(c *gin.Context) {
 }
 
 func (h *userHandler) DeleteUser(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
@@ -199,7 +215,7 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.DeleteUser(uint(id), currentUserID, getAuditContext(c)); err != nil {
+	if err := h.userService.DeleteUser(id, currentUserID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -210,9 +226,8 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 }
 
 func (h *userHandler) HardDeleteUser(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
@@ -222,7 +237,7 @@ func (h *userHandler) HardDeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.HardDeleteUser(uint(id), currentUserID, getAuditContext(c)); err != nil {
+	if err := h.userService.HardDeleteUser(id, currentUserID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -233,9 +248,8 @@ func (h *userHandler) HardDeleteUser(c *gin.Context) {
 }
 
 func (h *userHandler) AssignRole(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
@@ -245,7 +259,7 @@ func (h *userHandler) AssignRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.AssignRole(uint(id), req.RoleID, getAuditContext(c)); err != nil {
+	if err := h.userService.AssignRole(id, req.RoleID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
@@ -256,19 +270,17 @@ func (h *userHandler) AssignRole(c *gin.Context) {
 }
 
 func (h *userHandler) RemoveRole(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid user id")
+	id, ok := parseIDParam(c, "id", "user id")
+	if !ok {
 		return
 	}
 
-	roleID, err := strconv.ParseUint(c.Param("roleId"), 10, 32)
-	if err != nil {
-		response.ValidationError(c, "invalid role id")
+	roleID, ok := parseIDParam(c, "roleId", "role id")
+	if !ok {
 		return
 	}
 
-	if err := h.userService.RemoveRole(uint(id), uint(roleID), getAuditContext(c)); err != nil {
+	if err := h.userService.RemoveRole(id, roleID, getAuditContext(c)); err != nil {
 		response.Error(c, err)
 		return
 	}
