@@ -71,11 +71,13 @@ func generateSecureToken() (string, error) {
 func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
 	user, err := s.userRepo.FindByEmail(emailAddr)
 
-	// 无论邮箱是否存在，都执行等量工作（hash + 随机生成）保持时间一致
-	dummyToken, _ := generateSecureToken()
-	_ = repository.HashResetToken(dummyToken)
-
 	if err != nil {
+		// 邮箱不存在：执行与正常流程等量的工作
+		// token 生成 + hash + DB 读取 + 邮件发送的时间成本
+		dummyToken, _ := generateSecureToken()
+		_ = repository.HashResetToken(dummyToken)
+		// 模拟 DB 读取延迟
+		s.tokenRepo.TouchDummy()
 		return nil
 	}
 
@@ -190,10 +192,12 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 		}
 
 		// 记录密码历史
-		_ = s.passwordHistoryRepo.Create(&repository.PasswordHistory{
+		if err := s.passwordHistoryRepo.CreateWithTx(tx, &repository.PasswordHistory{
 			UserID:       user.ID,
 			PasswordHash: hashedPassword,
-		})
+		}); err != nil {
+			zap.L().Error("Failed to save password history", zap.Error(err))
+		}
 
 		return nil
 	})

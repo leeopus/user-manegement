@@ -89,6 +89,11 @@ func main() {
 			zap.L().Fatal("Failed to migrate database", zap.Error(err))
 		}
 		zap.L().Info("Database migration completed")
+
+			// Composite index for audit log queries by user + created_at
+			if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_audit_user_created_at ON audit_logs (user_id, created_at DESC)").Error; err != nil {
+				zap.L().Warn("Failed to create audit_logs composite index", zap.Error(err))
+			}
 	} else {
 		zap.L().Info("AutoMigrate skipped (set AUTO_MIGRATE=true to enable)")
 	}
@@ -155,17 +160,20 @@ func main() {
 	r.Use(middleware.Recovery(zap.L()))
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
+	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.BodyLimit())
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	// 健康检查：生产环境限制为内部访问
-	r.GET("/health", healthCheck(sqlDB))
+	// 健康检查：公开端点仅返回 200/503，不泄露基础设施信息
+	r.GET("/health", healthCheckPublic(sqlDB))
 
 	r.GET("/api/csrf-token", middleware.CSRFTokenRateLimit(redis.Client), csrfHandler.GetToken)
 
 	v1 := r.Group("/api/v1")
 	v1.Use(middleware.APIRateLimit(redis.Client))
 	{
+		v1.GET("/health/detail", middleware.Auth(blacklistMgr), healthCheckDetail(sqlDB))
+
 		auth := v1.Group("/auth")
 		auth.Use(middleware.CSRF(redis.Client))
 		{
@@ -188,6 +196,7 @@ func main() {
 			users.POST("", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.CreateUser)
 			users.PUT("/:id", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.UpdateUser)
 			users.DELETE("/:id", middleware.RequirePermission(rbacCfg, service.PermUserDelete), userHandler.DeleteUser)
+			users.DELETE("/:id/hard", middleware.RequirePermission(rbacCfg, service.PermUserDelete), userHandler.HardDeleteUser)
 		}
 
 		roles := v1.Group("/roles")
@@ -259,8 +268,35 @@ func main() {
 	zap.L().Info("Server exited gracefully")
 }
 
-// healthCheck 返回健康检查 handler
-func healthCheck(sqlDB *sql.DB) gin.HandlerFunc {
+// healthCheckPublic 公开健康检查，仅返回 200/503，不泄露基础设施细节
+func healthCheckPublic(sqlDB *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		healthy := true
+
+		if sqlDB != nil {
+			if err := sqlDB.Ping(); err != nil {
+				healthy = false
+			}
+		}
+
+		if redis.Client != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := redis.Client.Ping(ctx).Err(); err != nil {
+				healthy = false
+			}
+		}
+
+		if healthy {
+			c.JSON(200, gin.H{"status": "ok"})
+		} else {
+			c.JSON(503, gin.H{"status": "unhealthy"})
+		}
+	}
+}
+
+// healthCheckDetail 详细健康检查，需认证，返回各组件状态
+func healthCheckDetail(sqlDB *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		status := gin.H{"status": "ok"}
 

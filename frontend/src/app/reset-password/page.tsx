@@ -29,20 +29,9 @@ export default async function UniversalResetPasswordPage({
     console.log('无法获取浏览器语言设置，使用默认中文')
   }
 
-  // 重定向到带语言的页面，保留token参数
   const redirectUrl = token
-    ? `/${targetLang}/reset-password?token=${token}`
+    ? `/${targetLang}/reset-password#token=${token}`
     : `/${targetLang}/reset-password`
 
   redirect(redirectUrl)
-
-  // 显示加载状态（以防重定向失败）
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 px-4">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mx-auto mb-4"></div>
-        <p className="text-gray-600">正在跳转到密码重置页面...</p>
-      </div>
-    </div>
-  )
 }

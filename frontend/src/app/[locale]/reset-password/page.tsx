@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "@/i18n/routing"
+import { useSearchParams } from "next/navigation"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -46,14 +47,28 @@ export default function ResetPasswordPage() {
     }
   }, [password, passwordResult.error])
 
-  // 验证token
+  // 验证token — 优先从 hash fragment 读取（不泄露到服务器日志/Referrer），兼容 query 参数
   useEffect(() => {
-    const resetToken = searchParams.get("token")
+    let resetToken: string | null = null
+
+    // 优先从 hash 中读取 (#token=xxx)
+    const hash = window.location.hash
+    if (hash && hash.startsWith('#token=')) {
+      resetToken = hash.substring('#token='.length)
+    }
+
+    // 兼容旧的 query 参数方式
+    if (!resetToken) {
+      resetToken = searchParams.get("token")
+    }
+
     if (!resetToken) {
       setTokenValid(false)
       setValidating(false)
       return
     }
+    // 清除 URL 中的 token，防止泄露到浏览器历史/Referrer/日志
+    window.history.replaceState({}, '', window.location.pathname)
     setToken(resetToken)
     validateTokenFn(resetToken)
   }, [searchParams])
@@ -221,6 +236,7 @@ export default function ResetPasswordPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? t('hidePassword') : t('showPassword')}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
@@ -243,8 +259,8 @@ export default function ResetPasswordPage() {
               <div className="bg-blue-50 rounded-lg p-4 space-y-2">
                 <p className="text-xs font-semibold text-gray-700">{tv('passwordRequirements')}</p>
                 <ul className="text-xs text-gray-600 space-y-1.5">
-                  <li className={`flex items-center ${password.length >= 12 ? 'text-green-600' : 'text-blue-600'}`}>
-                    {password.length >= 12 ? (
+                  <li className={`flex items-center ${password.length >= 8 ? 'text-green-600' : 'text-blue-600'}`}>
+                    {password.length >= 8 ? (
                       <Check className="h-3 w-3 mr-2" />
                     ) : (
                       <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
@@ -296,6 +312,7 @@ export default function ResetPasswordPage() {
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? t('hidePassword') : t('showPassword')}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
@@ -304,7 +321,7 @@ export default function ResetPasswordPage() {
               {confirmPassword.length > 0 && (
                 <p className={`mt-1.5 text-sm flex items-center ${passwordsMatch ? 'text-green-600' : 'text-red-600'}`}>
                   {passwordsMatch ? (
-                    <><CheckCircle className="h-4 w-4 mr-1.5" />{tv('password.mismatch') ? '' : ''}</>
+                    <><CheckCircle className="h-4 w-4 mr-1.5" />{tv('password.match')}</>
                   ) : (
                     <><XCircle className="h-4 w-4 mr-1.5" />{tv('password.mismatch')}</>
                   )}

@@ -19,6 +19,7 @@ type PasswordHistory struct {
 
 type PasswordHistoryRepository interface {
 	Create(ph *PasswordHistory) error
+	CreateWithTx(tx *gorm.DB, ph *PasswordHistory) error
 	FindByUserID(userID uint, limit int) ([]PasswordHistory, error)
 	CleanupOld(userID uint, keep int) error
 }
@@ -33,6 +34,10 @@ func NewPasswordHistoryRepository(db *gorm.DB) PasswordHistoryRepository {
 
 func (r *passwordHistoryRepository) Create(ph *PasswordHistory) error {
 	return r.db.Create(ph).Error
+}
+
+func (r *passwordHistoryRepository) CreateWithTx(tx *gorm.DB, ph *PasswordHistory) error {
+	return tx.Create(ph).Error
 }
 
 func (r *passwordHistoryRepository) FindByUserID(userID uint, limit int) ([]PasswordHistory, error) {

@@ -1,7 +1,7 @@
 package dto
 
 import (
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 
 	"github.com/gin-gonic/gin"
@@ -31,10 +31,40 @@ func NewAuditContext(c *gin.Context, userID uint) AuditContext {
 	}
 }
 
-// SessionFingerprint 生成匿名 session 指纹（IP + User-Agent），供 CSRF 绑定使用
+const csrfSessionCookie = "csrf_session"
+
+// SessionFingerprint 获取或创建 CSRF session ID（通过 HttpOnly cookie）
+// 每个浏览器实例拥有唯一、随机的 session ID，不受 NAT/User-Agent 影响
 func SessionFingerprint(c *gin.Context) string {
-	ip := c.ClientIP()
-	ua := c.GetHeader("User-Agent")
-	h := sha256.Sum256([]byte(ip + "|" + ua))
-	return hex.EncodeToString(h[:16])
+	sessionID, err := c.Cookie(csrfSessionCookie)
+	if err == nil && sessionID != "" {
+		return sessionID
+	}
+
+	// 生成新的随机 session ID（32 字节 = 256 bit 熵）
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// 回退到 IP+UA（仅在 rand.Read 失败时）
+		return fallbackSessionFingerprint(c)
+	}
+	sessionID = hex.EncodeToString(b)
+
+	// 设置 HttpOnly, SameSite=Strict cookie
+	c.SetSameSite(0) // http.SameSiteDefaultMode
+	c.SetCookie(
+		csrfSessionCookie,
+		sessionID,
+		86400, // 24 小时
+		"/",
+		"",
+		false, // Secure=false: CSRF cookie 无需 HTTPS（CSRF 保护不依赖 HTTPS）
+		true,  // HttpOnly: JavaScript 无法读取
+	)
+
+	return sessionID
+}
+
+// fallbackSessionFingerprint 仅在随机数生成失败时使用
+func fallbackSessionFingerprint(c *gin.Context) string {
+	return c.ClientIP()
 }

@@ -35,6 +35,12 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
+# Run as non-root user
+RUN addgroup -g 1001 -S appuser && \
+    adduser -S appuser -u 1001 -G appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 # Expose port
 EXPOSE 3000
 

@@ -1,3 +1,5 @@
+'use client'
+
 import {
   APIResponse,
   LoginRequest,
@@ -20,24 +22,37 @@ let refreshPromise: Promise<boolean> | null = null
 let lastRefreshAttempt = 0
 const REFRESH_COOLDOWN_MS = 5000
 
-// 跨标签页同步：当一个标签页刷新 token 后，通知其他标签页重新获取用户信息
-const authChannel = typeof BroadcastChannel !== 'undefined'
-  ? new BroadcastChannel('auth_sync')
-  : null
+// Retry queue: serializes retry requests after a token refresh to avoid CSRF race conditions
+let retryQueue: Array<() => void> = []
+let isRetrying = false
 
-if (authChannel) {
-  authChannel.onmessage = (event: MessageEvent) => {
-    if (event.data?.type === 'TOKEN_REFRESHED') {
-      // 另一个标签页完成了 token 刷新，本标签页的 cookie 已更新
-      // 重置刷新状态以便本标签页后续请求正常
-      isRefreshing = false
-      refreshPromise = null
-    } else if (event.data?.type === 'LOGOUT') {
-      // 另一个标签页登出，本标签页也需要清除状态
-      isRefreshing = false
-      refreshPromise = null
+function processRetryQueue() {
+  if (isRetrying || retryQueue.length === 0) return
+  isRetrying = true
+  const next = retryQueue.shift()
+  if (next) {
+    next()
+  }
+}
+
+// 跨标签页同步：当一个标签页刷新 token 后，通知其他标签页重新获取用户信息
+let authChannel: BroadcastChannel | null = null
+
+function getAuthChannel(): BroadcastChannel | null {
+  if (authChannel) return authChannel
+  if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+    authChannel = new BroadcastChannel('auth_sync')
+    authChannel.onmessage = (event: MessageEvent) => {
+      if (event.data?.type === 'TOKEN_REFRESHED') {
+        isRefreshing = false
+        refreshPromise = null
+      } else if (event.data?.type === 'LOGOUT') {
+        isRefreshing = false
+        refreshPromise = null
+      }
     }
   }
+  return authChannel
 }
 
 async function refreshAccessToken(): Promise<boolean> {
@@ -65,7 +80,7 @@ async function refreshAccessToken(): Promise<boolean> {
 
       const data = await response.json()
       if (data.success === true) {
-        authChannel?.postMessage({ type: 'TOKEN_REFRESHED' })
+        getAuthChannel()?.postMessage({ type: 'TOKEN_REFRESHED' })
       }
       return data.success === true
     } catch {
@@ -135,38 +150,53 @@ class APIClient {
       if (!data.success && data.error?.code === 'UNAUTHORIZED_401' && !path.includes('/auth/refresh')) {
         const refreshed = await refreshAccessToken()
         if (refreshed) {
-          // 重试时重新获取 CSRF token（原 token 已被一次性消耗）
-          let retryHeaders: Record<string, string> = {
-            'Content-Type': 'application/json',
-          }
+          // Queue the retry to serialize concurrent retries (avoids CSRF race)
+          return new Promise<APIResponse<T>>((resolve) => {
+            retryQueue.push(async () => {
+              try {
+                let retryHeaders: Record<string, string> = {
+                  'Content-Type': 'application/json',
+                }
 
-          if (options?.method && CSRF_REQUIRED_METHODS.includes(options.method)) {
-            try {
-              retryHeaders = (await addCSRFToHeaders(retryHeaders)) as Record<string, string>
-            } catch {
-              // CSRF 获取失败时，不重试写操作，直接返回 401 错误让用户重新登录
-              return data
-            }
-          }
+                if (options?.method && CSRF_REQUIRED_METHODS.includes(options.method)) {
+                  try {
+                    retryHeaders = (await addCSRFToHeaders(retryHeaders)) as Record<string, string>
+                  } catch {
+                    resolve(data)
+                    return
+                  }
+                }
 
-          try {
-            const retryResponse = await fetch(url, {
-              ...options,
-              headers: retryHeaders,
-              credentials: 'include',
-              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                const retryController = new AbortController()
+                const retryTimeoutId = setTimeout(() => retryController.abort(), REQUEST_TIMEOUT_MS)
+                try {
+                  const retryResponse = await fetch(url, {
+                    ...options,
+                    headers: retryHeaders,
+                    credentials: 'include',
+                    signal: retryController.signal,
+                  })
+
+                  const retryContentType = retryResponse.headers.get('content-type') || ''
+                  if (!retryContentType.includes('application/json')) {
+                    resolve(data)
+                    return
+                  }
+
+                  resolve(await retryResponse.json())
+                } catch {
+                  // 重试网络错误时返回原始 401 错误
+                  resolve(data)
+                } finally {
+                  clearTimeout(retryTimeoutId)
+                }
+              } finally {
+                isRetrying = false
+                processRetryQueue()
+              }
             })
-
-            const retryContentType = retryResponse.headers.get('content-type') || ''
-            if (!retryContentType.includes('application/json')) {
-              return data
-            }
-
-            return await retryResponse.json()
-          } catch {
-            // 重试网络错误时返回原始 401 错误
-            return data
-          }
+            processRetryQueue()
+          })
         }
       }
 
@@ -241,7 +271,7 @@ class APIClient {
       throw APIException.fromAPIError(response.error!)
     }
 
-    authChannel?.postMessage({ type: 'LOGOUT' })
+    getAuthChannel()?.postMessage({ type: 'LOGOUT' })
   }
 
   async requestPasswordReset(email: string): Promise<void> {

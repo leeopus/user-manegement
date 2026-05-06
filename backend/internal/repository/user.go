@@ -9,13 +9,16 @@ import (
 
 type User struct {
 	gorm.Model
-	Username     string     `gorm:"size:50;uniqueIndex" json:"username"`
-	Email        string     `gorm:"size:100;uniqueIndex;not null" json:"email"`
-	PasswordHash string     `gorm:"size:255;not null" json:"-"`
-	Avatar       string     `gorm:"size:255" json:"avatar"`
-	Status       string     `gorm:"size:20;default:active" json:"status"`
-	LastLoginAt  *time.Time `gorm:"" json:"last_login_at"`
-	Roles        []Role     `gorm:"many2many:user_roles;" json:"roles"`
+	Username          string     `gorm:"size:50;uniqueIndex" json:"username"`
+	Email             string     `gorm:"size:100;uniqueIndex;not null" json:"email"`
+	PasswordHash      string     `gorm:"size:255;not null" json:"-"`
+	Avatar            string     `gorm:"size:255" json:"avatar"`
+	Status            string     `gorm:"size:20;default:active" json:"status"`
+	EmailVerifiedAt   *time.Time `json:"email_verified_at"`
+	PasswordChangedAt *time.Time `gorm:"not null" json:"password_changed_at"`
+	LastLoginAt       *time.Time `json:"last_login_at"`
+	LastLoginIP       string     `gorm:"size:45" json:"last_login_ip"`
+	Roles             []Role     `gorm:"many2many:user_roles;" json:"roles"`
 }
 
 // BeforeDelete 在软删除前清除唯一约束字段，避免阻止同名用户重新注册
@@ -46,12 +49,15 @@ type UserRepository interface {
 	FindByUsername(username string) (*User, error)
 	Update(user *User) error
 	Delete(id uint) error
+	DeleteWithTx(tx *gorm.DB, id uint) error
+	HardDelete(id uint) error
 	List(offset, limit int) ([]User, int64, error)
-	UpdateLastLogin(id uint) error
+	UpdateLastLogin(id uint, ip string) error
 	GetUserRoles(userID uint) ([]Role, error)
 	Transaction(fn func(tx *gorm.DB) error) error
 	CreateWithTx(tx *gorm.DB, user *User) error
 	UpdateWithTx(tx *gorm.DB, user *User) error
+	FindByIDWithTx(tx *gorm.DB, id uint) (*User, error)
 	FindByEmailWithTx(tx *gorm.DB, email string) (*User, error)
 	FindByUsernameWithTx(tx *gorm.DB, username string) (*User, error)
 }
@@ -133,13 +139,25 @@ func (r *userRepository) List(offset, limit int) ([]User, int64, error) {
 		return nil, 0, err
 	}
 
-	err := r.db.Preload("Roles").Offset(offset).Limit(limit).Order("id ASC").Find(&users).Error
+	err := r.db.Offset(offset).Limit(limit).Order("id ASC").Find(&users).Error
 	return users, total, err
 }
 
-func (r *userRepository) UpdateLastLogin(id uint) error {
+func (r *userRepository) UpdateLastLogin(id uint, ip string) error {
 	now := time.Now()
-	return r.db.Model(&User{}).Where("id = ?", id).Update("last_login_at", now).Error
+	return r.db.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"last_login_at": now,
+		"last_login_ip": ip,
+	}).Error
+}
+
+func (r *userRepository) HardDelete(id uint) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM user_roles WHERE user_id = ?", id).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&User{}, id).Error
+	})
 }
 
 func (r *userRepository) GetUserRoles(userID uint) ([]Role, error) {
@@ -179,4 +197,17 @@ func (r *userRepository) FindByUsernameWithTx(tx *gorm.DB, username string) (*Us
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (r *userRepository) FindByIDWithTx(tx *gorm.DB, id uint) (*User, error) {
+	var user User
+	err := tx.First(&user, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) DeleteWithTx(tx *gorm.DB, id uint) error {
+	return tx.Delete(&User{}, id).Error
 }

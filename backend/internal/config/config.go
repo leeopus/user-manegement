@@ -54,6 +54,7 @@ type SecurityConfig struct {
 	MaxTotalAttempts     int  `mapstructure:"max_total_attempts"`
 	MaxSessionsPerUser   int  `mapstructure:"max_sessions_per_user"`
 	AccessTokenMaxTTLMin int  `mapstructure:"access_token_max_ttl_min"`
+	RefreshTokenTTLDays  int  `mapstructure:"refresh_token_ttl_days"`
 	CSRFTokenTTLMin      int  `mapstructure:"csrf_token_ttl_min"`
 }
 
@@ -76,6 +77,7 @@ var flatToNested = map[string]string{
 	"MAX_TOTAL_ATTEMPTS":        "security.max_total_attempts",
 	"MAX_SESSIONS_PER_USER":     "security.max_sessions_per_user",
 	"ACCESS_TOKEN_MAX_TTL_MIN":  "security.access_token_max_ttl_min",
+	"REFRESH_TOKEN_TTL_DAYS":    "security.refresh_token_ttl_days",
 	"CSRF_TOKEN_TTL_MIN":        "security.csrf_token_ttl_min",
 }
 
@@ -98,7 +100,8 @@ func Load(configPath string) error {
 	viper.SetDefault("security.lockout_duration_min", 30)
 	viper.SetDefault("security.max_total_attempts", 15)
 	viper.SetDefault("security.max_sessions_per_user", 5)
-	viper.SetDefault("security.access_token_max_ttl_min", 60)
+	viper.SetDefault("security.access_token_max_ttl_min", 15)
+	viper.SetDefault("security.refresh_token_ttl_days", 30)
 	viper.SetDefault("security.csrf_token_ttl_min", 30)
 
 	// Read from config file (.env)
@@ -126,6 +129,7 @@ func Load(configPath string) error {
 	viper.BindEnv("security.max_total_attempts", "MAX_TOTAL_ATTEMPTS")
 	viper.BindEnv("security.max_sessions_per_user", "MAX_SESSIONS_PER_USER")
 	viper.BindEnv("security.access_token_max_ttl_min", "ACCESS_TOKEN_MAX_TTL_MIN")
+	viper.BindEnv("security.refresh_token_ttl_days", "REFRESH_TOKEN_TTL_DAYS")
 	viper.BindEnv("security.csrf_token_ttl_min", "CSRF_TOKEN_TTL_MIN")
 	viper.AutomaticEnv()
 
@@ -154,12 +158,24 @@ func Load(configPath string) error {
 	if sec.MaxSessionsPerUser < 1 || sec.MaxSessionsPerUser > 20 {
 		return fmt.Errorf("MAX_SESSIONS_PER_USER must be between 1 and 20, got %d", sec.MaxSessionsPerUser)
 	}
+	if sec.RefreshTokenTTLDays < 1 || sec.RefreshTokenTTLDays > 90 {
+		return fmt.Errorf("REFRESH_TOKEN_TTL_DAYS must be between 1 and 90, got %d", sec.RefreshTokenTTLDays)
+	}
 
 	return nil
 }
 
 func Get() *Config {
 	return AppConfig
+}
+
+// GetRefreshTokenTTL 返回统一的 refresh token 有效期
+func (c *Config) GetRefreshTokenTTL() time.Duration {
+	days := c.Security.RefreshTokenTTLDays
+	if days <= 0 {
+		days = 30
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // GetIntEnv 从环境变量读取整数，不存在或失败则返回默认值

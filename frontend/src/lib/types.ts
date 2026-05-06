@@ -17,6 +17,7 @@ export interface APIResponse<T = any> {
 export interface APIError {
   code: string // 错误码，如 "AUTH_LOGIN_INVALID_CREDENTIALS_401"
   message: string // 翻译键，如 "AUTH_LOGIN_INVALID_CREDENTIALS"
+  request_id?: string // 请求追踪 ID
   details?: Record<string, unknown> // 额外错误详情
 }
 
@@ -43,12 +44,19 @@ export interface RefreshTokenRequest {
 // 响应数据类型
 // =====================================================
 
+export interface Role {
+  id: number
+  name: string
+  code: string
+}
+
 export interface User {
   id: number
   email: string
   username: string
   avatar?: string
   status?: string
+  roles?: Role[]
   created_at?: string
   updated_at?: string
 }
@@ -59,5 +67,5 @@ export interface LoginResponseData {
 }
 
 export interface RegisterResponseData {
-  user: User
+  message: string
 }

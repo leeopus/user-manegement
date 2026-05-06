@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter } from "@/i18n/routing"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -108,7 +108,6 @@ export default function RegisterPage() {
       await api.register({ email, password })
       router.push("/login?registered=true")
     } catch (err) {
-      console.error("Registration error:", err)
       setError(getError(err))
     } finally {
       setLoading(false)
@@ -188,6 +187,7 @@ export default function RegisterPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? t('hidePassword') : t('showPassword')}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
@@ -210,8 +210,8 @@ export default function RegisterPage() {
               <div className="bg-blue-50 rounded-lg p-4 space-y-2">
                 <p className="text-xs font-semibold text-gray-700">{tv('passwordRequirements')}</p>
                 <ul className="text-xs text-gray-600 space-y-1.5">
-                  <li className={`flex items-center ${password.length >= 12 ? 'text-green-600' : 'text-blue-600'}`}>
-                    {password.length >= 12 ? (
+                  <li className={`flex items-center ${password.length >= 8 ? 'text-green-600' : 'text-blue-600'}`}>
+                    {password.length >= 8 ? (
                       <Check className="h-3 w-3 mr-2" />
                     ) : (
                       <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />

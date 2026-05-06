@@ -3,6 +3,7 @@ package response
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	apperrors "github.com/user-system/backend/pkg/errors"
@@ -34,9 +35,10 @@ func ParsePagination(c *gin.Context) (page, pageSize, offset int) {
 
 // ErrorDetail 错误详情
 type ErrorDetail struct {
-	Code    string                 `json:"code"`              // 错误码
-	Message string                 `json:"message"`           // 翻译键
-	Details map[string]interface{} `json:"details,omitempty"` // 额外详情
+	Code      string                 `json:"code"`                // 错误码
+	Message   string                 `json:"message"`             // 翻译键
+	RequestID string                 `json:"request_id,omitempty"` // 请求追踪 ID
+	Details   map[string]interface{} `json:"details,omitempty"`   // 额外详情
 }
 
 // APIResponse 统一响应格式
@@ -62,9 +64,19 @@ func Created(c *gin.Context, data interface{}) {
 	})
 }
 
+func getRequestID(c *gin.Context) string {
+	if id, ok := c.Get("request_id"); ok {
+		if s, ok := id.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 // Error 错误响应（使用 AppError）
 func Error(c *gin.Context, err error) {
-	// 检查是否为应用错误
+	requestID := getRequestID(c)
+
 	if appErr, ok := apperrors.IsAppError(err); ok {
 		status := appErr.HTTPStatus
 		if status == 0 {
@@ -74,36 +86,95 @@ func Error(c *gin.Context, err error) {
 		c.JSON(status, APIResponse{
 			Success: false,
 			Error: &ErrorDetail{
-				Code:    appErr.Code,
-				Message: appErr.MessageKey,
-				Details: appErr.Details,
+				Code:      appErr.Code,
+				Message:   appErr.MessageKey,
+				RequestID: requestID,
+				Details:   appErr.Details,
 			},
 		})
 		return
 	}
 
-	// 未知错误，返回通用错误
 	c.JSON(http.StatusInternalServerError, APIResponse{
 		Success: false,
 		Error: &ErrorDetail{
-			Code:    apperrors.ErrInternalServer.Code,
-			Message: apperrors.ErrInternalServer.MessageKey,
+			Code:      apperrors.ErrInternalServer.Code,
+			Message:   apperrors.ErrInternalServer.MessageKey,
+			RequestID: requestID,
 		},
 	})
 }
 
 // ValidationError 验证错误响应（用于请求参数验证）
 func ValidationError(c *gin.Context, message string) {
+	// 清理错误信息，避免暴露内部字段名和类型细节
+	sanitized := sanitizeValidationMessage(message)
+
 	c.JSON(http.StatusBadRequest, APIResponse{
 		Success: false,
 		Error: &ErrorDetail{
 			Code:    "VALIDATION_ERROR_400",
 			Message: "VALIDATION_ERROR",
 			Details: map[string]interface{}{
-				"message": message,
+				"message": sanitized,
 			},
 		},
 	})
+}
+
+// sanitizeValidationMessage 清理 Gin binding 错误信息，脱敏内部结构体路径和 Go 类型名
+func sanitizeValidationMessage(msg string) string {
+	// 使用简单的字符串处理脱敏 Gin binding 错误
+	msg = stripGoFieldPaths(msg)
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	return msg
+}
+
+// stripGoFieldPaths 移除 Go 结构体字段路径
+// 将 "Key: 'RegisterRequest.Email' Error:Field validation for 'Email' failed on the 'email' tag"
+// 转为 "Email: validation failed on email"
+func stripGoFieldPaths(msg string) string {
+	const keyPrefix = "Key: '"
+	const errorMid = "' Error:Field validation for '"
+	const failedOn = "' failed on the '"
+	const tagEnd = "' tag"
+
+	keyIdx := strings.Index(msg, keyPrefix)
+	if keyIdx == -1 {
+		return msg
+	}
+
+	// 提取字段路径
+	pathStart := keyIdx + len(keyPrefix)
+	errorIdx := strings.Index(msg[pathStart:], errorMid)
+	if errorIdx == -1 {
+		return msg
+	}
+	fieldPath := msg[pathStart : pathStart+errorIdx]
+
+	// 提取字段名（最后一个 . 之后）
+	fieldName := fieldPath
+	if dot := strings.LastIndex(fieldPath, "."); dot != -1 {
+		fieldName = fieldPath[dot+1:]
+	}
+
+	// 提取验证规则
+	ruleStart := pathStart + errorIdx + len(errorMid)
+	failedIdx := strings.Index(msg[ruleStart:], failedOn)
+	if failedIdx == -1 {
+		return fieldName + ": validation error"
+	}
+
+	tagStart := ruleStart + failedIdx + len(failedOn)
+	tagEndIdx := strings.Index(msg[tagStart:], tagEnd)
+	if tagEndIdx == -1 {
+		return fieldName + ": validation error"
+	}
+
+	rule := msg[tagStart : tagStart+tagEndIdx]
+	return fieldName + ": validation failed on " + rule
 }
 
 // Unauthorized 未授权响应 (401)

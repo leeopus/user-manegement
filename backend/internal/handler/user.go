@@ -15,6 +15,7 @@ type UserHandler interface {
 	CreateUser(c *gin.Context)
 	UpdateUser(c *gin.Context)
 	DeleteUser(c *gin.Context)
+	HardDeleteUser(c *gin.Context)
 }
 
 type userHandler struct {
@@ -34,6 +35,15 @@ type CreateUserRequest struct {
 type UpdateUserRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=32"`
 	Email    string `json:"email" binding:"required,email"`
+}
+
+func getCurrentUserID(c *gin.Context) (uint, bool) {
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		return 0, false
+	}
+	userID, ok := userIDVal.(uint)
+	return userID, ok
 }
 
 func getAuditContext(c *gin.Context) dto.AuditContext {
@@ -66,7 +76,13 @@ func (h *userHandler) GetUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.GetUser(uint(id))
+	currentUserID, ok := getCurrentUserID(c)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
+
+	user, err := h.userService.GetUser(uint(id), currentUserID)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -104,7 +120,13 @@ func (h *userHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.UpdateUser(uint(id), req.Username, req.Email, getAuditContext(c))
+	currentUserID, ok := getCurrentUserID(c)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
+
+	user, err := h.userService.UpdateUser(uint(id), req.Username, req.Email, currentUserID, getAuditContext(c))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -120,8 +142,7 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	currentUserIDVal, _ := c.Get("user_id")
-	currentUserID, ok := currentUserIDVal.(uint)
+	currentUserID, ok := getCurrentUserID(c)
 	if !ok {
 		response.Unauthorized(c)
 		return
@@ -134,5 +155,28 @@ func (h *userHandler) DeleteUser(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"message": "user deleted successfully",
+	})
+}
+
+func (h *userHandler) HardDeleteUser(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.ValidationError(c, "invalid user id")
+		return
+	}
+
+	currentUserID, ok := getCurrentUserID(c)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
+
+	if err := h.userService.HardDeleteUser(uint(id), currentUserID, getAuditContext(c)); err != nil {
+		response.Error(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"message": "user permanently deleted",
 	})
 }

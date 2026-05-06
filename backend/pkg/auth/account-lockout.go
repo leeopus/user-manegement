@@ -64,7 +64,9 @@ func (m *AccountLockoutManager) RecordFailedAttempt(email, ip string) error {
 	}
 
 	if count == 1 {
-		m.redis.Expire(ctx, key, attemptWindow)
+		if err := m.redis.Expire(ctx, key, attemptWindow).Err(); err != nil {
+			return fmt.Errorf("failed to set attempt window expiry: %w", err)
+		}
 	}
 
 	maxFailed, maxTotal, lockoutDur := getLockoutConfig()
@@ -76,13 +78,17 @@ func (m *AccountLockoutManager) RecordFailedAttempt(email, ip string) error {
 		return err
 	}
 	if total == 1 {
-		m.redis.Expire(ctx, totalKey, lockoutDur)
+		if err := m.redis.Expire(ctx, totalKey, lockoutDur).Err(); err != nil {
+			return fmt.Errorf("failed to set total attempt window expiry: %w", err)
+		}
 	}
 
 	// 单 IP 超限 或 email 维度总计数超限 都触发锁定
 	if count >= int64(maxFailed) || total >= int64(maxTotal) {
 		lockK := lockedKey(email)
-		m.redis.Set(ctx, lockK, strconv.FormatInt(total, 10), lockoutDur)
+		if err := m.redis.Set(ctx, lockK, strconv.FormatInt(total, 10), lockoutDur).Err(); err != nil {
+			return fmt.Errorf("failed to set lockout: %w", err)
+		}
 		m.redis.Del(ctx, key)
 	}
 

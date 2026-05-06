@@ -1,10 +1,12 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/pkg/auth"
@@ -106,6 +108,15 @@ func (s *permissionService) UpdatePermission(id uint, name, code, resource, acti
 
 	code = strings.ToLower(strings.TrimSpace(code))
 
+	// Check uniqueness if code is changing
+	if code != permission.Code {
+		if existing, _ := s.permissionRepo.FindByCode(code); existing != nil {
+			return nil, apperrors.ErrValidationFailed.WithDetails(map[string]interface{}{
+				"reason": fmt.Sprintf("permission code %q already exists", code),
+			})
+		}
+	}
+
 	permission.Name = strings.TrimSpace(name)
 	permission.Code = code
 	permission.Resource = strings.TrimSpace(resource)
@@ -113,6 +124,13 @@ func (s *permissionService) UpdatePermission(id uint, name, code, resource, acti
 	permission.Description = strings.TrimSpace(description)
 
 	if err := s.permissionRepo.Update(permission); err != nil {
+		// Handle race condition: concurrent request created same code
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, apperrors.ErrValidationFailed.WithDetails(map[string]interface{}{
+				"reason": fmt.Sprintf("permission code %q already exists", code),
+			})
+		}
 		return nil, apperrors.ErrInternalServer
 	}
 

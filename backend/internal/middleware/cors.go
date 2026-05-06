@@ -18,7 +18,8 @@ func CORS() gin.HandlerFunc {
 	}
 	hasConfiguredOrigins := len(cfg.CORS.Origins) > 0
 	ginMode := os.Getenv("GIN_MODE")
-	allowAllLocalhost := ginMode != "release"
+	// 需要显式启用 localhost CORS，而非仅依赖 GIN_MODE
+	allowLocalhost := ginMode != "release" && os.Getenv("ALLOW_LOCALHOST_CORS") != "false"
 
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
@@ -28,7 +29,7 @@ func CORS() gin.HandlerFunc {
 			if allowedOrigins[origin] {
 				allowedOrigin = origin
 			}
-		} else if allowAllLocalhost {
+		} else if allowLocalhost {
 			if strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
 				allowedOrigin = origin
 			}

@@ -19,11 +19,8 @@ func isSecureRequest(c *gin.Context) bool {
 	if cfg != nil && cfg.Security.CookieSecure {
 		return true
 	}
-	// 非 release 模式的回退逻辑：根据实际连接判断
+	// 仅根据实际 TLS 连接判断，不信任 X-Forwarded-Proto（可被伪造）
 	if c.Request.TLS != nil {
-		return true
-	}
-	if c.GetHeader("X-Forwarded-Proto") == "https" {
 		return true
 	}
 	return false
@@ -33,7 +30,7 @@ func isSecureRequest(c *gin.Context) bool {
 func SetTokenCookie(c *gin.Context, name, token string, maxAge time.Duration) {
 	isSecure := isSecureRequest(c)
 
-	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(
 		name,
 		token,
@@ -58,7 +55,7 @@ func GetTokenCookie(c *gin.Context, name string) (string, error) {
 func ClearTokenCookie(c *gin.Context, name string) {
 	isSecure := isSecureRequest(c)
 
-	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(
 		name,
 		"",

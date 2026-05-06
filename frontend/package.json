@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "i18n:check": "tsx scripts/check-i18n.ts",
-    "i18n:add-locale": "tsx scripts/add-locale.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "precommit": "npm run i18n:check",
     "prebuild": "npm run i18n:check"
   },
@@ -27,13 +29,17 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.19.39",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.5"
   }
 }

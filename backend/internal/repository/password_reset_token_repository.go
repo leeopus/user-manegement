@@ -16,6 +16,7 @@ type PasswordResetTokenRepository interface {
 	DeleteExpiredTokens() error
 	FindByEmail(email string) ([]PasswordResetToken, error)
 	Transaction(fn func(tx *gorm.DB) error) error
+	TouchDummy()
 }
 
 type passwordResetTokenRepository struct {
@@ -64,4 +65,10 @@ func (r *passwordResetTokenRepository) FindByEmail(email string) ([]PasswordRese
 
 func (r *passwordResetTokenRepository) Transaction(fn func(tx *gorm.DB) error) error {
 	return r.db.Transaction(fn)
+}
+
+// TouchDummy 执行一次无意义的 DB 查询，模拟正常流程的 DB 读取延迟以防止时序侧信道
+func (r *passwordResetTokenRepository) TouchDummy() {
+	var count int64
+	r.db.Model(&PasswordResetToken{}).Where("1 = 0").Count(&count)
 }

@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { routing } from '@/i18n/routing';
 import { LocalePreference } from '@/components/locale-preference';
 import { AuthProvider } from '@/lib/auth-provider';
+import { ErrorBoundary } from '@/components/error-boundary';
 
 export function generateStaticParams() {
   return routing.locales.map((locale) => ({ locale }));
@@ -18,15 +19,16 @@ export async function generateMetadata({
   const { locale } = await params;
   const t = await getTranslations({ locale, namespace: 'metadata' });
 
+  // 添加多语言SEO支持
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://localhost:3000'
   return {
     title: t('title'),
     description: t('description'),
-    // 添加多语言SEO支持
     alternates: {
       languages: {
-        'zh-CN': `http://106.15.3.98:3000/zh`,
-        'en': `http://106.15.3.98:3000/en`,
-        'x-default': `http://106.15.3.98:3000/zh`
+        'zh-CN': `${siteUrl}/zh`,
+        'en': `${siteUrl}/en`,
+        'x-default': `${siteUrl}/zh`
       }
     }
   };
@@ -53,10 +55,12 @@ export default async function LocaleLayout({
   return (
     <div className="h-full antialiased min-h-full flex flex-col">
       <NextIntlClientProvider messages={messages}>
-        <AuthProvider>
-          <LocalePreference />
-          {children}
-        </AuthProvider>
+        <ErrorBoundary>
+          <AuthProvider>
+            <LocalePreference />
+            {children}
+          </AuthProvider>
+        </ErrorBoundary>
       </NextIntlClientProvider>
     </div>
   );

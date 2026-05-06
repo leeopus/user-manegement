@@ -21,7 +21,8 @@
     "containsUsername": "密码不能包含用户名",
     "tooWeak": "密码过于简单",
     "sameChars": "密码不能全是相同字符",
-    "mismatch": "两次输入的密码不一致"
+    "mismatch": "两次输入的密码不一致",
+    "match": "密码一致"
   },
   "passwordStrength": "密码强度",
   "passwordRequirements": "密码建议（可选）：",

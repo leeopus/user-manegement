@@ -1,5 +1,6 @@
-import { TFunction } from 'next-intl'
 import { APIError } from './types'
+
+type TranslateFn = (key: string) => string
 
 /**
  * API 错误类
@@ -17,7 +18,7 @@ export class APIException extends Error {
   /**
    * 获取本地化错误消息
    */
-  getLocalizedMessage(t: TFunction): string {
+  getLocalizedMessage(t: TranslateFn): string {
     const message = t(this.messageKey)
 
     // 如果翻译键不存在，返回通用错误消息
@@ -106,7 +107,8 @@ export function isUnauthorized(error: unknown): boolean {
 export function isNetworkError(error: unknown): boolean {
   if (error instanceof Error) {
     return error.message.includes('Failed to fetch') ||
-           error.message.includes('NetworkError')
+           error.message.includes('NetworkError') ||
+           error.message.startsWith('NETWORK_ERROR:')
   }
   return false
 }

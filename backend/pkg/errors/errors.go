@@ -31,11 +31,15 @@ func New(code, messageKey string, httpStatus int) *AppError {
 
 // WithDetails 创建一个带有详情的新错误实例（不修改原对象，避免并发竞态）
 func (e *AppError) WithDetails(details map[string]interface{}) *AppError {
+	copied := make(map[string]interface{}, len(details))
+	for k, v := range details {
+		copied[k] = v
+	}
 	return &AppError{
 		Code:       e.Code,
 		MessageKey: e.MessageKey,
 		HTTPStatus: e.HTTPStatus,
-		Details:    details,
+		Details:    copied,
 	}
 }
 
@@ -72,9 +76,9 @@ var (
 
 	// ErrRegisterSilent 注册静默成功（用于防止邮箱枚举：邮箱已存在时仍返回成功）
 	ErrRegisterSilent = New(
-		"AUTH_REGISTER_SILENT_200",
+		"AUTH_REGISTER_SILENT_201",
 		"AUTH_REGISTER_SUCCESS",
-		http.StatusOK,
+		http.StatusCreated,
 	)
 
 	ErrUsernameAlreadyExists = New(

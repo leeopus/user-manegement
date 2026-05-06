@@ -2,6 +2,7 @@ package service
 
 import (
 	"strings"
+	"time"
 
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/repository"
@@ -14,9 +15,10 @@ import (
 
 type UserService interface {
 	CreateUser(username, email, password string, auditCtx dto.AuditContext) (*repository.User, error)
-	GetUser(id uint) (*repository.User, error)
-	UpdateUser(id uint, username, email string, auditCtx dto.AuditContext) (*repository.User, error)
+	GetUser(id uint, currentUserID uint) (*repository.User, error)
+	UpdateUser(id uint, username, email string, currentUserID uint, auditCtx dto.AuditContext) (*repository.User, error)
 	DeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error
+	HardDeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error
 	ListUsers(offset, pageSize int) ([]repository.User, int64, error)
 	AssignRole(userID, roleID uint, auditCtx dto.AuditContext) error
 	RemoveRole(userID, roleID uint, auditCtx dto.AuditContext) error
@@ -71,7 +73,6 @@ func (s *userService) CreateUser(username, email, password string, auditCtx dto.
 
 	var user *repository.User
 	createErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
-		// 事务内查询+插入，利用唯一约束防止并发重复
 		if _, err := s.userRepo.FindByUsernameWithTx(tx, username); err == nil {
 			return apperrors.ErrUsernameAlreadyExists
 		}
@@ -79,11 +80,13 @@ func (s *userService) CreateUser(username, email, password string, auditCtx dto.
 			return apperrors.ErrEmailAlreadyExists
 		}
 
+		now := time.Now()
 		user = &repository.User{
-			Username:     username,
-			Email:        email,
-			PasswordHash: passwordHash,
-			Status:       StatusActive,
+			Username:          username,
+			Email:             email,
+			PasswordHash:      passwordHash,
+			Status:            StatusActive,
+			PasswordChangedAt: &now,
 		}
 		return s.userRepo.CreateWithTx(tx, user)
 	})
@@ -107,11 +110,17 @@ func (s *userService) CreateUser(username, email, password string, auditCtx dto.
 	return user, nil
 }
 
-func (s *userService) GetUser(id uint) (*repository.User, error) {
+func (s *userService) GetUser(id uint, currentUserID uint) (*repository.User, error) {
+	if !s.isOwnerOrAdmin(id, currentUserID) {
+		return nil, apperrors.ErrUserNotFound
+	}
 	return s.userRepo.FindByID(id)
 }
 
-func (s *userService) UpdateUser(id uint, username, email string, auditCtx dto.AuditContext) (*repository.User, error) {
+func (s *userService) UpdateUser(id uint, username, email string, currentUserID uint, auditCtx dto.AuditContext) (*repository.User, error) {
+	if !s.isOwnerOrAdmin(id, currentUserID) {
+		return nil, apperrors.ErrUserNotFound
+	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	username = strings.TrimSpace(username)
 
@@ -130,7 +139,7 @@ func (s *userService) UpdateUser(id uint, username, email string, auditCtx dto.A
 	var user *repository.User
 	updateErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
 		var err error
-		user, err = s.userRepo.FindByID(id)
+		user, err = s.userRepo.FindByIDWithTx(tx, id)
 		if err != nil {
 			return apperrors.ErrUserNotFound
 		}
@@ -177,31 +186,41 @@ func (s *userService) DeleteUser(id uint, currentUserID uint, auditCtx dto.Audit
 		return apperrors.ErrCannotDeleteSelf
 	}
 
-	user, err := s.userRepo.FindByID(id)
-	if err != nil {
+	if _, err := s.userRepo.FindByID(id); err != nil {
 		return apperrors.ErrUserNotFound
 	}
 
-	// 先将状态设为 deleted，防止删除过程中新会话建立
-	user.Status = "deleted"
-	if err := s.userRepo.Update(user); err != nil {
+	// 在事务中执行状态更新 + 软删除，保证原子性
+	if err := s.userRepo.Transaction(func(tx *gorm.DB) error {
+		user, err := s.userRepo.FindByIDWithTx(tx, id)
+		if err != nil {
+			return apperrors.ErrUserNotFound
+		}
+		user.Status = "deleted"
+		if err := s.userRepo.UpdateWithTx(tx, user); err != nil {
+			return apperrors.ErrInternalServer
+		}
+		return s.userRepo.DeleteWithTx(tx, id)
+	}); err != nil {
+		if appErr, ok := apperrors.IsAppError(err); ok {
+			return appErr
+		}
 		return apperrors.ErrInternalServer
 	}
 
-	// 同步 Redis 用户状态缓存，立即阻断后续请求
-	_ = s.blacklistMgr.SetUserStatus(id, "deleted")
+	// 事务成功后执行副作用操作（Redis、审计）
+	// 先设置黑名单状态，即使后续操作部分失败也能阻止已删除用户的访问
+	if err := s.blacklistMgr.SetUserStatus(id, "deleted"); err != nil {
+		zap.L().Error("CRITICAL: failed to blacklist deleted user, access may remain valid", zap.Uint("user_id", id), zap.Error(err))
+	}
 
-	// 吊销被删除用户的所有 refresh token 和 access token
-	_ = s.refreshTokenMgr.RevokeAll(id)
-	_ = s.blacklistMgr.RevokeAllUserTokens(id)
-
-	// 清除 RBAC 缓存
+	if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
+		zap.L().Warn("Failed to revoke refresh tokens during soft delete", zap.Uint("user_id", id), zap.Error(err))
+	}
+	if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
+		zap.L().Warn("Failed to blacklist user tokens during soft delete", zap.Uint("user_id", id), zap.Error(err))
+	}
 	_ = s.rbacCache.InvalidateUserRoles(id)
-
-	// 执行软删除（BeforeDelete hook 会自动清除唯一约束字段）
-	if err := s.userRepo.Delete(id); err != nil {
-		return apperrors.ErrInternalServer
-	}
 
 	s.auditLogger.Log(&dto.AuditContext{
 		UserID:    auditCtx.UserID,
@@ -209,6 +228,47 @@ func (s *userService) DeleteUser(id uint, currentUserID uint, auditCtx dto.Audit
 		UserAgent: auditCtx.UserAgent,
 	}, "delete_user", "user", map[string]interface{}{
 		"target_id": id,
+	})
+
+	return nil
+}
+
+func (s *userService) HardDeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error {
+	if id == currentUserID {
+		return apperrors.ErrCannotDeleteSelf
+	}
+
+	// 先读取用户信息用于审计日志
+	user, err := s.userRepo.FindByID(id)
+	if err != nil {
+		return apperrors.ErrUserNotFound
+	}
+
+	// 先执行数据库删除，确保主操作成功
+	if err := s.userRepo.HardDelete(id); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	// 数据库操作成功后执行副作用操作
+	if err := s.blacklistMgr.SetUserStatus(id, "deleted"); err != nil {
+		zap.L().Error("CRITICAL: failed to blacklist hard-deleted user, access may remain valid", zap.Uint("user_id", id), zap.Error(err))
+	}
+	if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
+		zap.L().Warn("Failed to revoke refresh tokens during hard delete", zap.Uint("user_id", id), zap.Error(err))
+	}
+	if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
+		zap.L().Warn("Failed to blacklist user tokens during hard delete", zap.Uint("user_id", id), zap.Error(err))
+	}
+	_ = s.rbacCache.InvalidateUserRoles(id)
+
+	s.auditLogger.Log(&dto.AuditContext{
+		UserID:    auditCtx.UserID,
+		IPAddress: auditCtx.IPAddress,
+		UserAgent: auditCtx.UserAgent,
+	}, "hard_delete_user", "user", map[string]interface{}{
+		"target_id":       id,
+		"target_username": user.Username,
+		"target_email":    user.Email,
 	})
 
 	return nil
@@ -269,4 +329,49 @@ func (s *userService) RemoveRole(userID, roleID uint, auditCtx dto.AuditContext)
 	})
 
 	return nil
+}
+
+// isOwnerOrAdmin checks if currentUserID is the resource owner or has admin role / user management permission.
+func (s *userService) isOwnerOrAdmin(resourceUserID, currentUserID uint) bool {
+	if resourceUserID == currentUserID {
+		return true
+	}
+
+	// 先查 Redis 缓存
+	roles, err := s.rbacCache.GetUserRoles(currentUserID)
+	if err == nil && roles != nil {
+		return s.hasAdminOrUserManagePermission(roles)
+	}
+
+	// 缓存 miss：回源 DB 查询
+	dbRoles, dbErr := s.userRepo.GetUserRoles(currentUserID)
+	if dbErr != nil {
+		return false
+	}
+
+	for _, r := range dbRoles {
+		if r.Code == RoleAdmin {
+			return true
+		}
+		for _, p := range r.Permissions {
+			if p.Code == "user:manage" || p.Code == "user:write" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *userService) hasAdminOrUserManagePermission(roles []auth.RoleData) bool {
+	for _, role := range roles {
+		if role.Code == RoleAdmin {
+			return true
+		}
+		for _, p := range role.Permissions {
+			if p.Code == "user:manage" || p.Code == "user:write" {
+				return true
+			}
+		}
+	}
+	return false
 }

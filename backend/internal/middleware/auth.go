@@ -107,15 +107,16 @@ func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, sour
 		return
 	}
 
-	// 检查用户状态是否仍然 active（利用 Redis 缓存，零额外开销）
-	active, statusErr := blacklistMgr.CheckUserStatus(claims.UserID)
+	// 检查用户状态：Redis 缓存命中时直接判断，miss 时放行（依赖 token 本身的有效性）
+	// 若用户已被禁用，其 refresh token 已被 RevokeAll，无法刷新，access token 自然过期
+	active, cached, statusErr := blacklistMgr.CheckUserStatus(claims.UserID)
 	if statusErr != nil {
 		zap.L().Warn("User status check failed, rejecting request for security", zap.Error(statusErr))
 		response.Unauthorized(c)
 		c.Abort()
 		return
 	}
-	if !active {
+	if cached && !active {
 		response.Forbidden(c)
 		c.Abort()
 		return

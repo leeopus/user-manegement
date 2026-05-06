@@ -24,6 +24,14 @@ func getMaxSessionsPerUser() int {
 	return 5
 }
 
+func getSessionTTL() time.Duration {
+	cfg := config.Get()
+	if cfg != nil {
+		return cfg.GetRefreshTokenTTL()
+	}
+	return 30 * 24 * time.Hour
+}
+
 // ErrTokenNotFound 表示 token 在 Redis 中不存在（已过期或已撤销）
 var ErrTokenNotFound = fmt.Errorf("refresh token not found or expired")
 
@@ -77,7 +85,7 @@ var storeScript = redis.NewScript(`
 // Store 存储 refresh token，使用 Lua 脚本保证原子性
 func (m *RefreshTokenManager) Store(userID uint, token string, ttl time.Duration) error {
 	if m.redis == nil {
-		return nil
+		return fmt.Errorf("refresh token store unavailable")
 	}
 
 	ctx, cancel := m.ctx()
@@ -91,7 +99,7 @@ func (m *RefreshTokenManager) Store(userID uint, token string, ttl time.Duration
 		[]string{tokenKey, sessionsKey, refreshTokenPrefix},
 		fmt.Sprintf("%d", userID),
 		int64(ttl.Seconds()),
-		int64(30*24*time.Hour.Seconds()),
+		int64(getSessionTTL().Seconds()),
 		getMaxSessionsPerUser(),
 		hash,
 		float64(time.Now().UnixNano()),
@@ -125,10 +133,21 @@ func (m *RefreshTokenManager) Validate(token string) (uint, error) {
 	return userID, nil
 }
 
+// revokeScript 原子撤销单个 refresh token：DEL token + ZREM session
+var revokeScript = redis.NewScript(`
+	local tokenKey = KEYS[1]
+	local sessionsKey = KEYS[2]
+	local hash = ARGV[1]
+
+	redis.call("DEL", tokenKey)
+	redis.call("ZREM", sessionsKey, hash)
+	return 1
+`)
+
 // Revoke 撤销单个 refresh token
 func (m *RefreshTokenManager) Revoke(userID uint, token string) error {
 	if m.redis == nil {
-		return nil
+		return fmt.Errorf("refresh token store unavailable")
 	}
 
 	ctx, cancel := m.ctx()
@@ -138,15 +157,31 @@ func (m *RefreshTokenManager) Revoke(userID uint, token string) error {
 	tokenKey := fmt.Sprintf("%s%s", refreshTokenPrefix, hash)
 	sessionsKey := fmt.Sprintf("%s%d", userSessionsPrefix, userID)
 
-	m.redis.Del(ctx, tokenKey)
-	m.redis.ZRem(ctx, sessionsKey, hash)
-	return nil
+	_, err := revokeScript.Run(ctx, m.redis,
+		[]string{tokenKey, sessionsKey},
+		hash,
+	).Result()
+
+	return err
 }
+
+// revokeAllScript 原子撤销用户所有 refresh token：ZRANGE + DEL all + DEL sorted set
+var revokeAllScript = redis.NewScript(`
+	local sessionsKey = KEYS[1]
+	local tokenPrefix = ARGV[1]
+
+	local members = redis.call("ZRANGE", sessionsKey, 0, -1)
+	for _, hash in ipairs(members) do
+		redis.call("DEL", tokenPrefix .. hash)
+	end
+	redis.call("DEL", sessionsKey)
+	return 1
+`)
 
 // RevokeAll 撤销用户所有 refresh token（登出所有设备）
 func (m *RefreshTokenManager) RevokeAll(userID uint) error {
 	if m.redis == nil {
-		return nil
+		return fmt.Errorf("refresh token store unavailable")
 	}
 
 	ctx, cancel := m.ctx()
@@ -154,10 +189,98 @@ func (m *RefreshTokenManager) RevokeAll(userID uint) error {
 
 	sessionsKey := fmt.Sprintf("%s%d", userSessionsPrefix, userID)
 
-	members := m.redis.ZRange(ctx, sessionsKey, 0, -1).Val()
-	for _, hash := range members {
-		m.redis.Del(ctx, fmt.Sprintf("%s%s", refreshTokenPrefix, hash))
+	_, err := revokeAllScript.Run(ctx, m.redis,
+		[]string{sessionsKey},
+		refreshTokenPrefix,
+	).Result()
+
+	return err
+}
+
+// rotateScript 原子化旋转 refresh token：validate-old → revoke-old → store-new → evict-excess
+var rotateScript = redis.NewScript(`
+	local oldTokenKey = KEYS[1]
+	local sessionsKey = KEYS[2]
+	local newTokenKey = KEYS[3]
+
+	local expectedUserID = ARGV[1]
+	local newHash = ARGV[2]
+	local newTTL = tonumber(ARGV[3])
+	local oldHash = ARGV[4]
+	local sessionTTL = tonumber(ARGV[5])
+	local maxSessions = tonumber(ARGV[6])
+	local now = tonumber(ARGV[7])
+	local tokenPrefix = ARGV[8]
+
+	-- Step 1: Validate old token exists and matches user
+	local storedUserID = redis.call("GET", oldTokenKey)
+	if not storedUserID then
+		return {-1, "token_not_found"}
+	end
+	if storedUserID ~= expectedUserID then
+		return {-2, "user_mismatch"}
+	end
+
+	-- Step 2: Revoke old token
+	redis.call("DEL", oldTokenKey)
+	redis.call("ZREM", sessionsKey, oldHash)
+
+	-- Step 3: Store new token
+	redis.call("SET", newTokenKey, expectedUserID, "EX", newTTL)
+	redis.call("ZADD", sessionsKey, now, newHash)
+	redis.call("EXPIRE", sessionsKey, sessionTTL)
+
+	-- Step 4: Evict excess sessions
+	local count = redis.call("ZCARD", sessionsKey)
+	if count > maxSessions then
+		local excess = count - maxSessions
+		local oldest = redis.call("ZRANGE", sessionsKey, 0, excess - 1)
+		for _, old in ipairs(oldest) do
+			redis.call("DEL", tokenPrefix .. old)
+		end
+		redis.call("ZREMRANGEBYRANK", sessionsKey, 0, excess - 1)
+	end
+
+	return {1, "ok"}
+`)
+
+// Rotate atomically validates the old refresh token, revokes it, and stores the new one.
+func (m *RefreshTokenManager) Rotate(userID uint, oldToken, newToken string, newTTL time.Duration) error {
+	if m.redis == nil {
+		return fmt.Errorf("refresh token store unavailable")
 	}
 
-	return m.redis.Del(ctx, sessionsKey).Err()
+	ctx, cancel := m.ctx()
+	defer cancel()
+
+	oldHash := refreshTokenHash(oldToken)
+	newHash := refreshTokenHash(newToken)
+	oldTokenKey := fmt.Sprintf("%s%s", refreshTokenPrefix, oldHash)
+	sessionsKey := fmt.Sprintf("%s%d", userSessionsPrefix, userID)
+	newTokenKey := fmt.Sprintf("%s%s", refreshTokenPrefix, newHash)
+
+	result, err := rotateScript.Run(ctx, m.redis,
+		[]string{oldTokenKey, sessionsKey, newTokenKey},
+		fmt.Sprintf("%d", userID),
+		newHash,
+		int64(newTTL.Seconds()),
+		oldHash,
+		int64(getSessionTTL().Seconds()),
+		getMaxSessionsPerUser(),
+		float64(time.Now().UnixNano()),
+		refreshTokenPrefix,
+	).Int64Slice()
+
+	if err != nil {
+		return fmt.Errorf("rotate script error: %w", err)
+	}
+
+	if len(result) < 1 || result[0] < 0 {
+		if len(result) >= 2 && result[0] == -1 {
+			return ErrTokenNotFound
+		}
+		return fmt.Errorf("rotate failed: user mismatch")
+	}
+
+	return nil
 }

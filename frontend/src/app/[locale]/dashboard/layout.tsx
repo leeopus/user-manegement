@@ -1,10 +1,19 @@
 "use client"
 
 import { useTranslations } from 'next-intl'
+import { usePathname } from '@/i18n/routing'
 import { Button } from "@/components/ui/button"
 import { LanguageSwitcher } from "@/components/language-switcher"
 import { Link } from "@/i18n/routing"
 import { useAuth } from "@/lib/auth-provider"
+
+const navItems = [
+  { href: "/dashboard", labelKey: "home" },
+  { href: "/dashboard/users", labelKey: "users" },
+  { href: "/dashboard/roles", labelKey: "roles" },
+  { href: "/dashboard/permissions", labelKey: "permissions" },
+  { href: "/dashboard/applications", labelKey: "ssoApps" },
+]
 
 export default function DashboardLayout({
   children,
@@ -13,9 +22,14 @@ export default function DashboardLayout({
 }) {
   const t = useTranslations('dashboard')
   const { user, logout, loading } = useAuth()
+  const pathname = usePathname()
 
-  if (loading || !user) {
+  if (loading) {
     return <div className="min-h-screen flex items-center justify-center">{t('loading', { fallback: 'Loading...' })}</div>
+  }
+
+  if (!user) {
+    return null
   }
 
   return (
@@ -40,36 +54,22 @@ export default function DashboardLayout({
       <nav className="bg-white border-b border-gray-200">
         <div className="container mx-auto px-4">
           <div className="flex space-x-8">
-            <Link
-              href="/dashboard"
-              className="py-4 px-2 text-sm font-medium text-gray-900 border-b-2 border-gray-900"
-            >
-              {t('home')}
-            </Link>
-            <Link
-              href="/dashboard/users"
-              className="py-4 px-2 text-sm font-medium text-gray-600 hover:text-gray-900"
-            >
-              {t('users')}
-            </Link>
-            <Link
-              href="/dashboard/roles"
-              className="py-4 px-2 text-sm font-medium text-gray-600 hover:text-gray-900"
-            >
-              {t('roles')}
-            </Link>
-            <Link
-              href="/dashboard/permissions"
-              className="py-4 px-2 text-sm font-medium text-gray-600 hover:text-gray-900"
-            >
-              {t('permissions')}
-            </Link>
-            <Link
-              href="/dashboard/applications"
-              className="py-4 px-2 text-sm font-medium text-gray-600 hover:text-gray-900"
-            >
-              {t('ssoApps')}
-            </Link>
+            {navItems.map(({ href, labelKey }) => {
+              const isActive = pathname === href
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`py-4 px-2 text-sm font-medium border-b-2 ${
+                    isActive
+                      ? 'text-gray-900 border-gray-900'
+                      : 'text-gray-600 border-transparent hover:text-gray-900'
+                  }`}
+                >
+                  {t(labelKey)}
+                </Link>
+              )
+            })}
           </div>
         </div>
       </nav>

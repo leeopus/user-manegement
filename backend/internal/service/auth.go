@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
+	"github.com/user-system/backend/internal/config"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/pkg/auth"
@@ -20,9 +21,12 @@ import (
 var _ = auth.ErrTokenNotFound // 确保 auth 包被正确引用
 
 const (
-	refreshTokenTTL     = 30 * 24 * time.Hour
 	maxRegisterAttempts = 10
 )
+
+func getRefreshTokenTTL() time.Duration {
+	return config.Get().GetRefreshTokenTTL()
+}
 
 var (
 	dummyHash     string
@@ -43,7 +47,7 @@ func getDummyHash() string {
 
 type AuthService interface {
 	Register(email, password string, auditCtx dto.AuditContext) (*repository.User, error)
-	Login(email, password, clientIP string, rememberMe bool) (*repository.User, string, string, error)
+	Login(email, password, clientIP, userAgent string, rememberMe bool) (*repository.User, string, string, error)
 	RefreshToken(refreshToken string) (*repository.User, string, string, bool, error)
 	Logout(userID uint, refreshToken, accessToken string) error
 	LogoutAll(userID uint) error
@@ -71,19 +75,25 @@ func NewAuthService(userRepo repository.UserRepository, auditLogger *AuditLogger
 func (s *authService) Register(email, password string, auditCtx dto.AuditContext) (*repository.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 
+	// 先执行 dummy bcrypt 工作，确保所有分支（包括验证失败的分支）耗时一致
+	_ = utils.CheckPassword(password, getDummyHash())
+
 	if err := utils.ValidateEmail(email); err != nil {
+		_, _ = utils.HashPassword("constant-time-dummy-value")
 		return nil, apperrors.ErrEmailInvalid.WithDetails(map[string]interface{}{
 			"reason": err.Error(),
 		})
 	}
 
 	if _, err := utils.ValidatePassword(password, ""); err != nil {
+		_, _ = utils.HashPassword("constant-time-dummy-value")
 		return nil, apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
 			"reason": err.Error(),
 		})
 	}
 
 	if utils.IsDisposableEmail(email) {
+		_, _ = utils.HashPassword("constant-time-dummy-value")
 		return nil, apperrors.ErrDisposableEmail
 	}
 
@@ -93,10 +103,10 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 	}
 
 	// 无论邮箱是否存在，都执行等量 bcrypt 工作保持恒定时间，防止时序侧信道枚举
-	// 正常注册路径会执行 1 次 bcrypt hash；此处也执行 1 次 dummy check 对齐总耗时
+	// 两条路径各执行 1 次 CheckPassword + 1 次 HashPassword，总耗时一致
+
 	if emailExists {
-		_ = utils.CheckPassword(password, getDummyHash())
-		// 额外执行 1 次 dummy hash 以对齐正常路径的 HashPassword 调用
+		// 对齐正常路径的 HashPassword 调用
 		_, _ = utils.HashPassword("constant-time-dummy-value")
 		// 不返回"邮箱已存在"错误，防止邮箱枚举攻击
 		// 返回通用成功消息，与正常注册一致
@@ -117,12 +127,14 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 	createErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
 		currentUsername := username
 
+		now := time.Now()
 		for attempt := 0; attempt < maxRegisterAttempts; attempt++ {
 			user = &repository.User{
-				Username:     currentUsername,
-				Email:        email,
-				PasswordHash: passwordHash,
-				Status:       "active",
+				Username:          currentUsername,
+				Email:             email,
+				PasswordHash:      passwordHash,
+				Status:            "active",
+				PasswordChangedAt: &now,
 			}
 
 			if err := tx.Create(user).Error; err != nil {
@@ -165,8 +177,14 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 	return user, nil
 }
 
-func (s *authService) Login(email, password, clientIP string, rememberMe bool) (*repository.User, string, string, error) {
+func (s *authService) Login(email, password, clientIP, userAgent string, rememberMe bool) (*repository.User, string, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
+
+	if err := utils.ValidateEmail(email); err != nil {
+		return nil, "", "", apperrors.ErrEmailInvalid.WithDetails(map[string]interface{}{
+			"reason": err.Error(),
+		})
+	}
 
 	locked, remainingTime, err := s.lockoutManager.IsAccountLocked(email)
 	if err != nil {
@@ -219,24 +237,24 @@ func (s *authService) Login(email, password, clientIP string, rememberMe bool) (
 		return nil, "", "", apperrors.ErrInternalServer
 	}
 
-	if storeErr := s.refreshTokenMgr.Store(user.ID, refreshToken, refreshTokenTTL); storeErr != nil {
+	if storeErr := s.refreshTokenMgr.Store(user.ID, refreshToken, getRefreshTokenTTL()); storeErr != nil {
 		zap.L().Error("Failed to store refresh token, aborting login", zap.Error(storeErr))
 		return nil, "", "", apperrors.ErrInternalServer
 	}
 
-	if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
+	if err := s.userRepo.UpdateLastLogin(user.ID, clientIP); err != nil {
 		zap.L().Warn("Failed to update last login", zap.Error(err))
 	}
 
 	userWithRoles, err := s.userRepo.FindByIDWithRoles(user.ID)
 	if err != nil {
-		s.auditLogger.Log(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP}, "login", "user", map[string]interface{}{
+		s.auditLogger.Log(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP, UserAgent: userAgent}, "login", "user", map[string]interface{}{
 			"method": "password",
 		})
 		return user, accessToken, refreshToken, nil
 	}
 
-	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP}, "login", "user", map[string]interface{}{
+	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP, UserAgent: userAgent}, "login", "user", map[string]interface{}{
 		"method": "password",
 	})
 
@@ -253,7 +271,8 @@ func (s *authService) RefreshToken(refreshToken string) (*repository.User, strin
 		return nil, "", "", false, apperrors.ErrInvalidRefreshToken
 	}
 
-	storedUserID, validateErr := s.refreshTokenMgr.Validate(refreshToken)
+	// 先检查 token 是否在 Redis 中存在（用于重放检测）
+	_, validateErr := s.refreshTokenMgr.Validate(refreshToken)
 	if validateErr != nil {
 		if errors.Is(validateErr, auth.ErrTokenNotFound) {
 			if claims.ExpiresAt != nil && time.Now().Before(claims.ExpiresAt.Time) {
@@ -272,9 +291,6 @@ func (s *authService) RefreshToken(refreshToken string) (*repository.User, strin
 		)
 		return nil, "", "", false, apperrors.ErrInvalidRefreshToken
 	}
-	if storedUserID != claims.UserID {
-		return nil, "", "", false, apperrors.ErrInvalidRefreshToken
-	}
 
 	user, err := s.userRepo.FindByID(claims.UserID)
 	if err != nil {
@@ -289,22 +305,25 @@ func (s *authService) RefreshToken(refreshToken string) (*repository.User, strin
 		return nil, "", "", false, apperrors.ErrInternalServer
 	}
 
-	if err := s.refreshTokenMgr.Revoke(user.ID, refreshToken); err != nil {
-		zap.L().Warn("Failed to revoke old refresh token", zap.Error(err))
-	}
-
-	if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
-		if err := s.blacklistMgr.AddToBlacklist(claims.JTI, remaining); err != nil {
-			zap.L().Warn("Failed to blacklist old refresh token JTI", zap.Error(err))
-		}
-	}
-
 	newRefreshToken, _, err := utils.GenerateRefreshTokenWithRememberMe(user.ID, user.Username, user.Email, rememberMe)
 	if err != nil {
 		return nil, "", "", false, apperrors.ErrInternalServer
 	}
-	if storeErr := s.refreshTokenMgr.Store(user.ID, newRefreshToken, refreshTokenTTL); storeErr != nil {
-		zap.L().Warn("Failed to store new refresh token", zap.Error(storeErr))
+
+	// 原子旋转：validate-old → revoke-old → store-new，单次 Redis 操作
+	if rotateErr := s.refreshTokenMgr.Rotate(claims.UserID, refreshToken, newRefreshToken, getRefreshTokenTTL()); rotateErr != nil {
+		zap.L().Error("Failed to rotate refresh token atomically",
+			zap.Uint("user_id", claims.UserID),
+			zap.Error(rotateErr),
+		)
+		return nil, "", "", false, apperrors.ErrInvalidRefreshToken
+	}
+
+	// Best-effort: 将旧 refresh token JTI 加入黑名单
+	if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
+		if err := s.blacklistMgr.AddToBlacklist(claims.JTI, remaining); err != nil {
+			zap.L().Warn("Failed to blacklist old refresh token JTI", zap.Error(err))
+		}
 	}
 
 	return user, newAccessToken, newRefreshToken, rememberMe, nil

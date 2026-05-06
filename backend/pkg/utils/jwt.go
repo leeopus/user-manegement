@@ -33,12 +33,16 @@ type keyEntry struct {
 // jwtKeyManager 管理签名密钥，支持轮换期间的双 Key 验证
 var (
 	jwtCurrentKey  keyEntry
-	jwtPreviousKey *keyEntry // 轮换后保留旧 key 用于验证
+	jwtPreviousKey *keyEntry
 	jwtKeyMu       sync.RWMutex
 	jwtKeyInit     sync.Once
 )
 
-func initKeys() {
+// initJWTKey 确保密钥只初始化一次，使用写锁保护
+func initJWTKey() {
+	jwtKeyMu.Lock()
+	defer jwtKeyMu.Unlock()
+
 	jwtKeyInit.Do(func() {
 		cfg := config.Get()
 		secret := []byte(cfg.JWT.Secret)
@@ -47,20 +51,21 @@ func initKeys() {
 }
 
 func getCurrentKey() keyEntry {
-	jwtKeyInit.Do(func() {
-		cfg := config.Get()
-		secret := []byte(cfg.JWT.Secret)
-		jwtCurrentKey = keyEntry{secret: secret, kid: "key-1"}
-	})
+	initJWTKey()
+
+	jwtKeyMu.RLock()
+	defer jwtKeyMu.RUnlock()
 	return jwtCurrentKey
 }
 
 // RotateJWTSecret 密钥轮换：新 secret 立即用于签名，旧 secret 仍可用于验证
 func RotateJWTSecret(newSecret, newKid string) {
+	initJWTKey()
+
 	jwtKeyMu.Lock()
 	defer jwtKeyMu.Unlock()
 
-	old := getCurrentKey()
+	old := jwtCurrentKey
 	jwtPreviousKey = &keyEntry{
 		secret: make([]byte, len(old.secret)),
 		kid:    old.kid,
@@ -71,7 +76,6 @@ func RotateJWTSecret(newSecret, newKid string) {
 		secret: []byte(newSecret),
 		kid:    newKid,
 	}
-	_ = jwtCurrentKey // 确保 keyInit 不再覆盖
 }
 
 func generateJTI() (string, error) {
@@ -82,20 +86,36 @@ func generateJTI() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+func getAccessTokenTTL() time.Duration {
+	cfg := config.Get()
+	if cfg != nil && cfg.Security.AccessTokenMaxTTLMin > 0 {
+		return time.Duration(cfg.Security.AccessTokenMaxTTLMin) * time.Minute
+	}
+	return 15 * time.Minute
+}
+
+func getRefreshTokenTTL() time.Duration {
+	cfg := config.Get()
+	if cfg != nil {
+		return cfg.GetRefreshTokenTTL()
+	}
+	return 30 * 24 * time.Hour
+}
+
 func GenerateToken(userID uint, username, email string) (string, *Claims, error) {
-	return generateToken(userID, username, email, time.Hour, "access", false)
+	return generateToken(userID, username, email, getAccessTokenTTL(), "access", false)
 }
 
 func GenerateRefreshToken(userID uint, username, email string) (string, *Claims, error) {
-	return generateToken(userID, username, email, 720*time.Hour, "refresh", false)
+	return generateToken(userID, username, email, getRefreshTokenTTL(), "refresh", false)
 }
 
 func GenerateTokenWithRememberMe(userID uint, username, email string, rememberMe bool) (string, *Claims, error) {
-	return generateToken(userID, username, email, time.Hour, "access", rememberMe)
+	return generateToken(userID, username, email, getAccessTokenTTL(), "access", rememberMe)
 }
 
 func GenerateRefreshTokenWithRememberMe(userID uint, username, email string, rememberMe bool) (string, *Claims, error) {
-	return generateToken(userID, username, email, 720*time.Hour, "refresh", rememberMe)
+	return generateToken(userID, username, email, getRefreshTokenTTL(), "refresh", rememberMe)
 }
 
 func GenerateTokenWithExpiry(userID uint, username, email string, expiry time.Duration) (string, *Claims, error) {
@@ -107,7 +127,7 @@ func GenerateRefreshTokenWithExpiry(userID uint, username, email string, expiry 
 }
 
 func GenerateOAuthToken(userID uint, username, email, scope, clientID string) (string, *Claims, error) {
-	return generateOAuthToken(userID, username, email, time.Hour, scope, clientID)
+	return generateOAuthToken(userID, username, email, getAccessTokenTTL(), scope, clientID)
 }
 
 func generateToken(userID uint, username, email string, expiry time.Duration, tokenType string, rememberMe bool) (string, *Claims, error) {
@@ -116,9 +136,7 @@ func generateToken(userID uint, username, email string, expiry time.Duration, to
 		return "", nil, err
 	}
 
-	jwtKeyMu.RLock()
 	key := getCurrentKey()
-	jwtKeyMu.RUnlock()
 
 	claims := Claims{
 		UserID:     userID,
@@ -153,9 +171,7 @@ func generateOAuthToken(userID uint, username, email string, expiry time.Duratio
 		return "", nil, err
 	}
 
-	jwtKeyMu.RLock()
 	key := getCurrentKey()
-	jwtKeyMu.RUnlock()
 
 	claims := Claims{
 		UserID:    userID,
@@ -187,19 +203,20 @@ func generateOAuthToken(userID uint, username, email string, expiry time.Duratio
 
 // resolveSecret 根据 kid 查找对应的签名密钥
 func resolveSecret(kid string) []byte {
+	initJWTKey()
+
 	jwtKeyMu.RLock()
 	defer jwtKeyMu.RUnlock()
 
-	current := getCurrentKey()
-	if kid == "" || kid == current.kid {
-		return current.secret
+	if kid == "" || kid == jwtCurrentKey.kid {
+		return jwtCurrentKey.secret
 	}
 
 	if jwtPreviousKey != nil && kid == jwtPreviousKey.kid {
 		return jwtPreviousKey.secret
 	}
 
-	return current.secret
+	return jwtCurrentKey.secret
 }
 
 func ParseToken(tokenString string) (*Claims, error) {

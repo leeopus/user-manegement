@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter } from "@/i18n/routing"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -85,15 +85,16 @@ export default function ProfilePage() {
                 </div>
               </div>
 
+              {user.roles?.some(r => r.code === 'admin') && (
               <div className="pt-4 border-t">
                 <h3 className="font-medium mb-3">{t('quickLinks')}</h3>
                 <div className="space-y-2">
                   <Button variant="outline" className="w-full justify-start" onClick={() => router.push("/dashboard")}>
                     {t('adminPanel')}
                   </Button>
-                  <p className="text-xs text-gray-500">{t('adminOnly')}</p>
                 </div>
               </div>
+            )}
             </CardContent>
           </Card>
         </div>

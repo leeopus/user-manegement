@@ -2,16 +2,26 @@ package dto
 
 import "github.com/user-system/backend/internal/repository"
 
-// ToUserResponse 将 User 模型转换为公开响应
+// ToUserResponse 将 User 模型转换为公开响应（不包含 LastLoginIP 等敏感信息）
 func ToUserResponse(user *repository.User) UserResponse {
 	return UserResponse{
-		ID:        user.ID,
-		Username:  user.Username,
-		Email:     user.Email,
-		Avatar:    user.Avatar,
-		Status:    user.Status,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
+		ID:                user.ID,
+		Username:          user.Username,
+		Email:             user.Email,
+		Avatar:            user.Avatar,
+		Status:            user.Status,
+		EmailVerifiedAt:   user.EmailVerifiedAt,
+		PasswordChangedAt: user.PasswordChangedAt,
+		CreatedAt:         user.CreatedAt,
+		UpdatedAt:         user.UpdatedAt,
+	}
+}
+
+// ToAdminUserResponse 将 User 模型转换为管理员可见的响应（包含 LastLoginIP）
+func ToAdminUserResponse(user *repository.User) AdminUserResponse {
+	return AdminUserResponse{
+		UserResponse: ToUserResponse(user),
+		LastLoginIP:  user.LastLoginIP,
 	}
 }
 

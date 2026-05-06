@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/config"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
 	"github.com/user-system/backend/pkg/jwt"
@@ -14,7 +15,7 @@ import (
 // isSilentRegisterError 判断是否为防止邮箱枚举的静默成功错误
 func isSilentRegisterError(err error) bool {
 	if appErr, ok := apperrors.IsAppError(err); ok {
-		return appErr.Code == "AUTH_REGISTER_SILENT_200"
+		return appErr.Code == "AUTH_REGISTER_SILENT_201"
 	}
 	return false
 }
@@ -59,13 +60,11 @@ func (h *authHandler) Register(c *gin.Context) {
 
 	auditCtx := dto.NewAuditContext(c, 0)
 
-	user, err := h.authService.Register(req.Email, req.Password, auditCtx)
+	_, err := h.authService.Register(req.Email, req.Password, auditCtx)
 	if err != nil {
-		// 防止邮箱枚举：静默成功时返回与正常注册相同的响应结构
 		if isSilentRegisterError(err) {
 			response.Created(c, gin.H{
 				"message": "registration_processed",
-				"user":    nil,
 			})
 			return
 		}
@@ -73,8 +72,9 @@ func (h *authHandler) Register(c *gin.Context) {
 		return
 	}
 
+	// 统一响应结构，防止邮箱枚举
 	response.Created(c, gin.H{
-		"user": dto.ToUserResponse(user),
+		"message": "registration_processed",
 	})
 }
 
@@ -85,18 +85,20 @@ func (h *authHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, accessToken, refreshToken, err := h.authService.Login(req.Email, req.Password, c.ClientIP(), req.RememberMe)
+	user, accessToken, refreshToken, err := h.authService.Login(req.Email, req.Password, c.ClientIP(), c.GetHeader("User-Agent"), req.RememberMe)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
+	cfg := config.Get()
+	refreshTTL := cfg.GetRefreshTokenTTL()
 	if req.RememberMe {
 		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, 7*24*time.Hour)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, 30*24*time.Hour)
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
 	} else {
-		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, 15*time.Minute)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, 7*24*time.Hour)
+		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, time.Duration(cfg.Security.AccessTokenMaxTTLMin)*time.Minute)
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
 	}
 
 	response.Success(c, gin.H{
@@ -142,12 +144,14 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 	}
 
 	// 根据 RememberMe 状态设置与登录时一致的 cookie 时长
+	cfg := config.Get()
+	refreshTTL := cfg.GetRefreshTokenTTL()
 	if rememberMe {
 		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 7*24*time.Hour)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, 30*24*time.Hour)
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
 	} else {
-		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 15*time.Minute)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, 7*24*time.Hour)
+		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, time.Duration(cfg.Security.AccessTokenMaxTTLMin)*time.Minute)
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
 	}
 
 	response.Success(c, gin.H{

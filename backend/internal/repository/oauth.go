@@ -139,7 +139,7 @@ func (r *oauthTokenRepository) FindByRefreshToken(hash string) (*OAuthToken, err
 }
 
 func (r *oauthTokenRepository) Update(token *OAuthToken) error {
-	return r.db.Save(token).Error
+	return r.db.Model(token).Select("access_token", "refresh_token", "expires_at").Updates(token).Error
 }
 
 func (r *oauthTokenRepository) Delete(id uint) error {

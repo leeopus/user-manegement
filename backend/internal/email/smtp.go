@@ -61,7 +61,7 @@ func (s *smtpEmailService) SendPasswordResetEmail(email, resetLink string) error
 
 %s
 
-此链接将在 1 小时后过期。
+此链接将在 15 分钟后过期。
 
 如果这不是您的操作，请忽略此邮件。
 

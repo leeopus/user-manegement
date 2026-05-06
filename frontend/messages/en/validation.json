@@ -21,7 +21,8 @@
     "containsUsername": "Password cannot contain username",
     "tooWeak": "Password is too weak",
     "sameChars": "Password cannot be all the same characters",
-    "mismatch": "Passwords do not match"
+    "mismatch": "Passwords do not match",
+    "match": "Passwords match"
   },
   "passwordStrength": "Password strength",
   "passwordRequirements": "Password suggestions (optional):",

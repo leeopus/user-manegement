@@ -8,7 +8,7 @@ import (
 
 type AuditLog struct {
 	gorm.Model
-	UserID     uint   `gorm:"index:idx_audit_user_created"`
+	UserID     uint   `gorm:"not null;index:idx_audit_user_id"`
 	Action     string `gorm:"size:50;not null;index:idx_audit_action"`
 	Resource   string `gorm:"size:100;not null;index:idx_audit_resource"`
 	ResourceID uint

@@ -24,7 +24,7 @@ func (s *developmentEmailService) SendPasswordResetEmail(email, resetLink string
 	log.Println("=====================================")
 	log.Printf("收件人: %s", email)
 	log.Printf("重置链接: %s", resetLink)
-	log.Println("此链接将在 1 小时后过期")
+	log.Println("此链接将在 15 分钟后过期")
 	log.Println("如果这不是您的操作，请忽略此邮件")
 	log.Println("=====================================")
 	return nil

@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/config"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/service"
 	"github.com/user-system/backend/pkg/response"
@@ -96,11 +97,16 @@ func (h *oauthHandler) Token(c *gin.Context) {
 		return
 	}
 
+	cfg := config.Get()
+	expiresIn := 900
+	if cfg != nil && cfg.Security.AccessTokenMaxTTLMin > 0 {
+		expiresIn = cfg.Security.AccessTokenMaxTTLMin * 60
+	}
+
 	response.Success(c, gin.H{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
-		"expires_in":   3600,
-		// refresh_token 仅在需要时返回，此处省略以减少暴露面
+		"expires_in":   expiresIn,
 	})
 }
 

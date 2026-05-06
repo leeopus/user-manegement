@@ -141,15 +141,22 @@ func (m *TokenBlacklistManager) SetUserStatus(userID uint, status string) error 
 	defer cancel()
 
 	key := fmt.Sprintf("%s%d", userStatusPrefix, userID)
-	// 状态缓存 TTL 与 access token 最长有效期对齐
-	return m.redis.Set(ctx, key, status, getAccessTokenMaxTTL()).Err()
+	// 状态缓存 TTL 覆盖完整会话生命周期（与 refresh token 对齐）
+	// 避免缓存过期后 fail-open 导致已禁用用户通过验证
+	sessionTTL := getAccessTokenMaxTTL() * 4 // 覆盖多个 access token 周期
+	cfg := config.Get()
+	if cfg != nil {
+		sessionTTL = cfg.GetRefreshTokenTTL()
+	}
+	return m.redis.Set(ctx, key, status, sessionTTL).Err()
 }
 
-// CheckUserStatus 检查用户状态是否允许访问（active 以外的状态均拒绝）
-func (m *TokenBlacklistManager) CheckUserStatus(userID uint) (bool, error) {
+// CheckUserStatus 检查用户状态是否允许访问
+// 缓存命中时直接返回；缓存 miss 时 fail-closed，由调用方回源 DB 验证
+func (m *TokenBlacklistManager) CheckUserStatus(userID uint) (active bool, cached bool, err error) {
 	if m.redis == nil || userID == 0 {
-		// Redis 不可用时放行，避免锁死所有用户
-		return true, nil
+		// Redis 不可用时 fail-closed，由调用方决定是否回源 DB
+		return false, false, fmt.Errorf("user status check unavailable")
 	}
 	ctx, cancel := m.ctx()
 	defer cancel()
@@ -158,10 +165,10 @@ func (m *TokenBlacklistManager) CheckUserStatus(userID uint) (bool, error) {
 	val, err := m.redis.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
-			// 无缓存记录 = 未被标记为非活跃，放行
-			return true, nil
+			// 缓存 miss：返回 cached=false，由调用方回源 DB 确认
+			return false, false, nil
 		}
-		return false, err
+		return false, false, err
 	}
-	return val == "active", nil
+	return val == "active", true, nil
 }

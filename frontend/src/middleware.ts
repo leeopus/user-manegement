@@ -47,6 +47,15 @@ function addSecurityHeaders(response: NextResponse): void {
   }
 }
 
+// 验证 JWT 格式：必须为三段 base64url 编码结构
+function isValidJWTFormat(token: string): boolean {
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  // 每段必须是非空的 base64url 字符串
+  const base64urlPattern = /^[A-Za-z0-9_-]+$/;
+  return parts.every(part => part.length > 0 && base64urlPattern.test(part));
+}
+
 function authMiddleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -63,10 +72,13 @@ function authMiddleware(request: NextRequest) {
   const pathWithoutLocale = pathname.replace(LOCALE_PATTERN, '') || '/';
 
   // 检查是否有有效的 access_token 或 refresh_token cookie
-  // 空字符串表示 cookie 已被清除（过期），不应视为已认证
+  // 验证 cookie 不仅存在，而且包含格式有效的 JWT（三段 base64 结构）
   const accessToken = request.cookies.get('access_token')?.value;
   const refreshToken = request.cookies.get('refresh_token')?.value;
-  const hasAuth = !!(accessToken || refreshToken);
+  const hasAuth = !!(
+    (accessToken && isValidJWTFormat(accessToken)) ||
+    (refreshToken && isValidJWTFormat(refreshToken))
+  );
 
   // 已登录用户访问公共页面，不做重定向（让客户端处理）
   // 未登录用户访问受保护页面，重定向到登录页

@@ -386,19 +386,47 @@ func validateRedirectURIIsPublic(rawURI string) error {
 
 	// 拒绝明显的主机名模式
 	lowerHost := strings.ToLower(host)
-	internalHostnames := []string{"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "metadata.google.internal", "169.254.169.254"}
+	internalHostnames := []string{"localhost", "0.0.0.0", "[::1]", "metadata.google.internal", "169.254.169.254"}
 	for _, h := range internalHostnames {
 		if lowerHost == h {
 			return fmt.Errorf("redirect URI must not point to internal address: %s", host)
 		}
 	}
 
-	// 解析 IP 地址做进一步检查
+	// 尝试直接解析 IP（标准格式）
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return fmt.Errorf("redirect URI must not point to internal/private IP: %s", host)
+		if err := checkIPNotInternal(ip, host); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// DNS 解析后检查实际 IP，防止 DNS 重绑定攻击
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("could not resolve redirect URI host: %s", host)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("redirect URI host resolved to no addresses: %s", host)
+	}
+	for _, ip := range ips {
+		if err := checkIPNotInternal(ip, host); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+// checkIPNotInternal 检查 IP 是否为内部/私有地址
+func checkIPNotInternal(ip net.IP, host string) error {
+	// 标准化为 4 字节或 16 字节形式，覆盖 IPv4-mapped IPv6
+	ip = ip.To4()
+	if ip == nil {
+		ip = ip.To16()
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("redirect URI must not point to internal/private IP: %s", host)
+	}
 	return nil
 }

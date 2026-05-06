@@ -34,9 +34,9 @@ type PasswordPolicy struct {
 var DefaultPasswordPolicy = PasswordPolicy{
 	MinLength:      8,
 	MaxLength:      64,
-	RequireUpper:   true,
-	RequireLower:   true,
-	RequireNumber:  true,
+	RequireUpper:   false,
+	RequireLower:   false,
+	RequireNumber:  false,
 	RequireSpecial: false,
 	ForbidUsername: true,
 }
@@ -44,12 +44,7 @@ var DefaultPasswordPolicy = PasswordPolicy{
 // 邮箱验证正则（预编译，避免每次调用重新编译）
 var emailPattern = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
-// 常见弱密码列表（示例）
-var CommonPasswords = []string{
-	"password", "12345678", "123456789", "qwerty", "abc123",
-	"monkey", "1234567890", "password1", "123123", "qwerty123",
-	"password123", "admin123", "welcome1", "login123", "passw0rd",
-}
+// CommonPasswords is deprecated. Use IsBreachedPassword instead.
 
 // ValidatePassword 验证密码强度和规则（平衡模式）
 func ValidatePassword(password, username string) (PasswordStrength, error) {
@@ -108,11 +103,9 @@ func ValidatePassword(password, username string) (PasswordStrength, error) {
 		score += 1
 	}
 
-	// 只检查常见弱密码和明显安全问题
-	for _, common := range CommonPasswords {
-		if strings.EqualFold(password, common) {
-			return PasswordWeak, errors.New("validation.password.tooWeak")
-		}
+	// 检查泄露密码（top-10k 常见密码）
+	if IsBreachedPassword(password) {
+		return PasswordWeak, errors.New("validation.password.tooWeak")
 	}
 
 	// 检查是否全是相同字符
@@ -307,7 +300,7 @@ var disposableDomains = []string{
 	"mailscrap.com", "mailinater.com", "messagebeamer.de",
 	"recyclemail.dk", "sharklasers.com", "spamavert.com",
 	"uggsrock.com", "mailnesia.com", "getairmail.com",
-	" guerrillamail.biz", "harakirimail.com", "meltmail.com",
+	"guerrillamail.biz", "harakirimail.com", "meltmail.com",
 	"mintemail.com", "safetymail.info", "safetypost.de",
 	"spamfree24.org", "squizzy.de", "uggsrock.com",
 	"mailnull.com", "nomail.xl.cx", "throwam.com",

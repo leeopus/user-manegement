@@ -1,10 +1,12 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/pkg/auth"
@@ -100,11 +102,27 @@ func (s *roleService) UpdateRole(id uint, name, code, description string, auditC
 
 	code = strings.ToLower(strings.TrimSpace(code))
 
+	// Check uniqueness if code is changing
+	if code != role.Code {
+		if existing, _ := s.roleRepo.FindByCode(code); existing != nil {
+			return nil, apperrors.ErrRoleCodeExists.WithDetails(map[string]interface{}{
+				"reason": fmt.Sprintf("role code %q already exists", code),
+			})
+		}
+	}
+
 	role.Name = strings.TrimSpace(name)
 	role.Code = code
 	role.Description = strings.TrimSpace(description)
 
 	if err := s.roleRepo.Update(role); err != nil {
+		// Handle race condition: concurrent request created same code
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, apperrors.ErrRoleCodeExists.WithDetails(map[string]interface{}{
+				"reason": fmt.Sprintf("role code %q already exists", code),
+			})
+		}
 		return nil, apperrors.ErrInternalServer
 	}
 

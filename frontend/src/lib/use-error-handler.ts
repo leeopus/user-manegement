@@ -7,10 +7,12 @@
 import { useTranslations } from 'next-intl'
 import { APIException } from './errors'
 
+type TranslateFn = (key: string) => string
+
 /**
  * 处理 API 错误并返回本地化消息
  */
-function baseHandleAPIError(error: unknown, t: any): string {
+function baseHandleAPIError(error: unknown, t: TranslateFn): string {
   // 如果是 APIException，使用其方法获取本地化消息
   if (error instanceof APIException) {
     return error.getLocalizedMessage(t)
@@ -73,6 +75,6 @@ export function useErrorHandler() {
  *
  * @deprecated 推荐使用 useErrorHandler hook
  */
-export function handleAPIError(error: unknown, t: any): string {
+export function handleAPIError(error: unknown, t: TranslateFn): string {
   return baseHandleAPIError(error, t)
 }

@@ -27,7 +27,6 @@ backend/dist/
 .env.*.local
 backend/.env
 backend/.env.*
-!backend/.env.docker
 
 # Keep example files
 !.env.example
