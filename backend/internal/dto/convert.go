@@ -93,3 +93,24 @@ func ToUserWithRolesResponseList(users []repository.User) []UserWithRolesRespons
 	}
 	return result
 }
+
+// ToAuditLogResponse 将 AuditLog 模型转换为公开响应
+func ToAuditLogResponse(log *repository.AuditLog) AuditLogResponse {
+	username := ""
+	if log.User.ID > 0 {
+		username = log.User.Username
+	}
+	return AuditLogResponse{
+		ID:         log.ID,
+		UserID:     log.UserID,
+		Username:   username,
+		Action:     log.Action,
+		Resource:   log.Resource,
+		ResourceID: log.ResourceID,
+		Details:    log.Details,
+		IPAddress:  log.IPAddress,
+		UserAgent:  log.UserAgent,
+		RequestID:  log.RequestID,
+		CreatedAt:  log.CreatedAt,
+	}
+}

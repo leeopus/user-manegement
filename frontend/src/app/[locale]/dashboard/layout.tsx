@@ -5,14 +5,21 @@ import { usePathname } from '@/i18n/routing'
 import { Button } from "@/components/ui/button"
 import { LanguageSwitcher } from "@/components/language-switcher"
 import { Link } from "@/i18n/routing"
-import { useAuth } from "@/lib/auth-provider"
+import { useAuth, hasPermission } from "@/lib/auth-provider"
 
-const navItems = [
+interface NavItem {
+  href: string
+  labelKey: string
+  permission?: string
+}
+
+const navItems: NavItem[] = [
   { href: "/dashboard", labelKey: "home" },
-  { href: "/dashboard/users", labelKey: "users" },
-  { href: "/dashboard/roles", labelKey: "roles" },
-  { href: "/dashboard/permissions", labelKey: "permissions" },
-  { href: "/dashboard/applications", labelKey: "ssoApps" },
+  { href: "/dashboard/users", labelKey: "users", permission: "users:read" },
+  { href: "/dashboard/roles", labelKey: "roles", permission: "roles:manage" },
+  { href: "/dashboard/permissions", labelKey: "permissions", permission: "permissions:manage" },
+  { href: "/dashboard/applications", labelKey: "ssoApps", permission: "oauth:manage" },
+  { href: "/dashboard/audit-logs", labelKey: "auditLogs", permission: "audit:read" },
 ]
 
 export default function DashboardLayout({
@@ -32,9 +39,12 @@ export default function DashboardLayout({
     return null
   }
 
+  const visibleNavItems = navItems.filter(
+    item => !item.permission || hasPermission(user, item.permission)
+  )
+
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white border-b border-gray-200">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <h1 className="text-xl font-bold">{t('title')}</h1>
@@ -50,11 +60,10 @@ export default function DashboardLayout({
         </div>
       </header>
 
-      {/* Navigation */}
       <nav className="bg-white border-b border-gray-200">
         <div className="container mx-auto px-4">
           <div className="flex space-x-8">
-            {navItems.map(({ href, labelKey }) => {
+            {visibleNavItems.map(({ href, labelKey }) => {
               const isActive = pathname === href
               return (
                 <Link
@@ -74,7 +83,6 @@ export default function DashboardLayout({
         </div>
       </nav>
 
-      {/* Main content */}
       <main className="container mx-auto px-4 py-8">
         {children}
       </main>

@@ -15,6 +15,8 @@ type RoleHandler interface {
 	CreateRole(c *gin.Context)
 	UpdateRole(c *gin.Context)
 	DeleteRole(c *gin.Context)
+	AssignPermission(c *gin.Context)
+	RemovePermission(c *gin.Context)
 }
 
 type roleHandler struct {
@@ -29,6 +31,10 @@ type CreateRoleRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Code        string `json:"code" binding:"required"`
 	Description string `json:"description"`
+}
+
+type AssignPermissionRequest struct {
+	PermissionID uint `json:"permission_id" binding:"required"`
 }
 
 func (h *roleHandler) ListRoles(c *gin.Context) {
@@ -121,5 +127,51 @@ func (h *roleHandler) DeleteRole(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"message": "role deleted successfully",
+	})
+}
+
+func (h *roleHandler) AssignPermission(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.ValidationError(c, "invalid role id")
+		return
+	}
+
+	var req AssignPermissionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ValidationError(c, err.Error())
+		return
+	}
+
+	if err := h.roleService.AssignRolePermission(uint(id), req.PermissionID, getAuditContext(c)); err != nil {
+		response.Error(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"message": "permission assigned successfully",
+	})
+}
+
+func (h *roleHandler) RemovePermission(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.ValidationError(c, "invalid role id")
+		return
+	}
+
+	permissionID, err := strconv.ParseUint(c.Param("permissionId"), 10, 32)
+	if err != nil {
+		response.ValidationError(c, "invalid permission id")
+		return
+	}
+
+	if err := h.roleService.RemoveRolePermission(uint(id), uint(permissionID), getAuditContext(c)); err != nil {
+		response.Error(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"message": "permission removed successfully",
 	})
 }

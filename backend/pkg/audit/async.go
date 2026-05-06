@@ -56,6 +56,10 @@ func (r *AsyncAuditLogRepository) List(offset, limit int) ([]repository.AuditLog
 	return r.inner.List(offset, limit)
 }
 
+func (r *AsyncAuditLogRepository) ListFiltered(offset, limit int, filters repository.AuditLogFilters) ([]repository.AuditLog, int64, error) {
+	return r.inner.ListFiltered(offset, limit, filters)
+}
+
 // Shutdown 优雅关闭：停止接受新日志，排空队列中已有日志，或超时退出
 func (r *AsyncAuditLogRepository) Shutdown(timeout time.Duration) {
 	r.mu.Lock()

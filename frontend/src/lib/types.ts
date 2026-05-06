@@ -2,23 +2,17 @@
 // API 响应类型定义
 // =====================================================
 
-/**
- * 统一 API 响应格式
- */
 export interface APIResponse<T = any> {
   success: boolean
   data?: T
   error?: APIError
 }
 
-/**
- * API 错误详情
- */
 export interface APIError {
-  code: string // 错误码，如 "AUTH_LOGIN_INVALID_CREDENTIALS_401"
-  message: string // 翻译键，如 "AUTH_LOGIN_INVALID_CREDENTIALS"
-  request_id?: string // 请求追踪 ID
-  details?: Record<string, unknown> // 额外错误详情
+  code: string
+  message: string
+  request_id?: string
+  details?: Record<string, unknown>
 }
 
 // =====================================================
@@ -44,10 +38,23 @@ export interface RefreshTokenRequest {
 // 响应数据类型
 // =====================================================
 
+export interface Permission {
+  id: number
+  name: string
+  code: string
+  resource: string
+  action: string
+  description?: string
+  created_at?: string
+}
+
 export interface Role {
   id: number
   name: string
   code: string
+  description?: string
+  permissions?: Permission[]
+  created_at?: string
 }
 
 export interface User {
@@ -63,9 +70,90 @@ export interface User {
 
 export interface LoginResponseData {
   user: User
-  // Token 现在通过 httpOnly cookie 返回，不再在响应体中
 }
 
 export interface RegisterResponseData {
   message: string
+}
+
+// =====================================================
+// 请求类型（管理页面）
+// =====================================================
+
+export interface CreateUserRequest {
+  username: string
+  email: string
+  password: string
+}
+
+export interface UpdateUserRequest {
+  username: string
+  email: string
+}
+
+export interface CreateRoleRequest {
+  name: string
+  code: string
+  description?: string
+}
+
+export interface UpdateRoleRequest {
+  name: string
+  code: string
+  description?: string
+}
+
+export interface CreatePermissionRequest {
+  name: string
+  code: string
+  resource: string
+  action: string
+  description?: string
+}
+
+export interface UpdatePermissionRequest {
+  name: string
+  code: string
+  resource: string
+  action: string
+  description?: string
+}
+
+export interface CreateOAuthAppRequest {
+  name: string
+  redirect_uris: string
+  scopes?: string
+}
+
+export interface UpdateOAuthAppRequest {
+  name: string
+  redirect_uris: string
+}
+
+// =====================================================
+// 数据模型（扩展）
+// =====================================================
+
+export interface OAuthApplication {
+  id: number
+  name: string
+  client_id: string
+  client_secret?: string
+  redirect_uris: string
+  scopes?: string
+  created_at: string
+}
+
+export interface AuditLog {
+  id: number
+  user_id: number
+  username: string
+  action: string
+  resource: string
+  resource_id: number
+  details: string
+  ip_address: string
+  user_agent: string
+  request_id: string
+  created_at: string
 }

@@ -1,0 +1,22 @@
+{
+  "title": "Audit Logs",
+  "logsList": "Audit Log List",
+  "loading": "Loading...",
+  "noLogs": "No audit logs found",
+  "refresh": "Refresh",
+  "total": "Total: {count}",
+  "prev": "Previous",
+  "next": "Next",
+  "id": "ID",
+  "user": "User",
+  "action": "Action",
+  "resource": "Resource",
+  "resourceId": "Resource ID",
+  "details": "Details",
+  "ipAddress": "IP Address",
+  "createdAt": "Time",
+  "allActions": "All Actions",
+  "allResources": "All Resources",
+  "searchPlaceholder": "Search logs...",
+  "noDetails": "No details"
+}

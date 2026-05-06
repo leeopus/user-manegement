@@ -121,3 +121,10 @@ export function useAuth() {
   }
   return context
 }
+
+export function hasPermission(user: User | null, permissionCode: string): boolean {
+  if (!user?.roles) return false
+  return user.roles.some(role =>
+    role.permissions?.some(p => p.code === permissionCode)
+  )
+}

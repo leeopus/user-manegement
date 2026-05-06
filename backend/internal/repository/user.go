@@ -40,6 +40,12 @@ func (u *User) BeforeDelete(tx *gorm.DB) error {
 	return nil
 }
 
+type UserFilters struct {
+	Status string
+	Search string
+	RoleID uint
+}
+
 type UserRepository interface {
 	Create(user *User) error
 	FindByID(id uint) (*User, error)
@@ -48,10 +54,11 @@ type UserRepository interface {
 	FindByEmailWithRoles(email string) (*User, error)
 	FindByUsername(username string) (*User, error)
 	Update(user *User) error
+	UpdateStatus(id uint, status string) error
 	Delete(id uint) error
 	DeleteWithTx(tx *gorm.DB, id uint) error
 	HardDelete(id uint) error
-	List(offset, limit int) ([]User, int64, error)
+	List(offset, limit int, filters UserFilters) ([]User, int64, error)
 	UpdateLastLogin(id uint, ip string) error
 	GetUserRoles(userID uint) ([]Role, error)
 	Transaction(fn func(tx *gorm.DB) error) error
@@ -127,19 +134,37 @@ func (r *userRepository) Update(user *User) error {
 	return r.db.Model(user).Select("username", "email", "password_hash", "status", "avatar").Updates(user).Error
 }
 
+func (r *userRepository) UpdateStatus(id uint, status string) error {
+	return r.db.Model(&User{}).Where("id = ?", id).Update("status", status).Error
+}
+
 func (r *userRepository) Delete(id uint) error {
 	return r.db.Delete(&User{}, id).Error
 }
 
-func (r *userRepository) List(offset, limit int) ([]User, int64, error) {
+func (r *userRepository) List(offset, limit int, filters UserFilters) ([]User, int64, error) {
 	var users []User
 	var total int64
 
-	if err := r.db.Model(&User{}).Count(&total).Error; err != nil {
+	query := r.db.Model(&User{})
+
+	if filters.Status != "" {
+		query = query.Where("status = ?", filters.Status)
+	}
+	if filters.Search != "" {
+		search := "%" + filters.Search + "%"
+		query = query.Where("username LIKE ? OR email LIKE ?", search, search)
+	}
+	if filters.RoleID > 0 {
+		query = query.Joins("JOIN user_roles ON user_roles.user_id = users.id").
+			Where("user_roles.role_id = ?", filters.RoleID)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err := r.db.Offset(offset).Limit(limit).Order("id ASC").Find(&users).Error
+	err := query.Offset(offset).Limit(limit).Order("id ASC").Find(&users).Error
 	return users, total, err
 }
 

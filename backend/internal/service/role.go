@@ -22,6 +22,8 @@ type RoleService interface {
 	UpdateRole(id uint, name, code, description string, auditCtx dto.AuditContext) (*repository.Role, error)
 	DeleteRole(id uint, auditCtx dto.AuditContext) error
 	ListRoles(offset, pageSize int) ([]repository.Role, int64, error)
+	AssignRolePermission(roleID, permissionID uint, auditCtx dto.AuditContext) error
+	RemoveRolePermission(roleID, permissionID uint, auditCtx dto.AuditContext) error
 }
 
 type roleService struct {
@@ -159,6 +161,47 @@ func (s *roleService) DeleteRole(id uint, auditCtx dto.AuditContext) error {
 
 func (s *roleService) ListRoles(offset, pageSize int) ([]repository.Role, int64, error) {
 	return s.roleRepo.List(offset, pageSize)
+}
+
+func (s *roleService) AssignRolePermission(roleID, permissionID uint, auditCtx dto.AuditContext) error {
+	if _, err := s.roleRepo.FindByID(roleID); err != nil {
+		return apperrors.ErrRoleNotFound
+	}
+	if _, err := s.permissionRepo.FindByID(permissionID); err != nil {
+		return apperrors.ErrPermissionNotFound
+	}
+
+	if err := s.roleRepo.AssignPermission(roleID, permissionID); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	s.invalidateCacheForRole(roleID)
+
+	s.auditLogger.Log(&auditCtx, "assign_permission", "role", map[string]interface{}{
+		"role_id":       roleID,
+		"permission_id": permissionID,
+	})
+
+	return nil
+}
+
+func (s *roleService) RemoveRolePermission(roleID, permissionID uint, auditCtx dto.AuditContext) error {
+	if _, err := s.roleRepo.FindByID(roleID); err != nil {
+		return apperrors.ErrRoleNotFound
+	}
+
+	if err := s.roleRepo.RemovePermission(roleID, permissionID); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	s.invalidateCacheForRole(roleID)
+
+	s.auditLogger.Log(&auditCtx, "remove_permission", "role", map[string]interface{}{
+		"role_id":       roleID,
+		"permission_id": permissionID,
+	})
+
+	return nil
 }
 
 func (s *roleService) invalidateCacheForRole(roleID uint) {

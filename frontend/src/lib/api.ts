@@ -7,6 +7,18 @@ import {
   RegisterRequest,
   RegisterResponseData,
   User,
+  Role,
+  Permission,
+  OAuthApplication,
+  AuditLog,
+  CreateUserRequest,
+  UpdateUserRequest,
+  CreateRoleRequest,
+  UpdateRoleRequest,
+  CreatePermissionRequest,
+  UpdatePermissionRequest,
+  CreateOAuthAppRequest,
+  UpdateOAuthAppRequest,
 } from './types'
 import { APIException } from './errors'
 import { addCSRFToHeaders } from './csrf'
@@ -309,9 +321,13 @@ class APIClient {
     return response.data
   }
 
-  async listUsers(page = 1, pageSize = 10): Promise<{ users: User[]; total: number }> {
+  async listUsers(page = 1, pageSize = 10, filters?: { status?: string; search?: string }): Promise<{ users: User[]; total: number }> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    if (filters?.status) params.set('status', filters.status)
+    if (filters?.search) params.set('search', filters.search)
+
     const response = await this.request<{ users: User[]; total: number }>(
-      `/api/v1/users?page=${page}&page_size=${pageSize}`,
+      `/api/v1/users?${params.toString()}`,
       {}
     )
 
@@ -319,6 +335,251 @@ class APIClient {
       throw APIException.fromAPIError(response.error!)
     }
 
+    return response.data
+  }
+
+  async updateUserStatus(id: number, status: string): Promise<void> {
+    const response = await this.request<void>(`/api/v1/users/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    })
+
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  async getUser(id: number): Promise<User> {
+    const response = await this.request<User>(`/api/v1/users/${id}`, {})
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async createUser(data: CreateUserRequest): Promise<User> {
+    const response = await this.request<User>('/api/v1/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async updateUser(id: number, data: UpdateUserRequest): Promise<User> {
+    const response = await this.request<User>(`/api/v1/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async deleteUser(id: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/users/${id}`, {
+      method: 'DELETE',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  async assignRole(userId: number, roleId: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/users/${userId}/roles`, {
+      method: 'POST',
+      body: JSON.stringify({ role_id: roleId }),
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  async removeRole(userId: number, roleId: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/users/${userId}/roles/${roleId}`, {
+      method: 'DELETE',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  // Role management
+  async listRoles(page = 1, pageSize = 10): Promise<{ roles: Role[]; total: number }> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    const response = await this.request<{ roles: Role[]; total: number }>(
+      `/api/v1/roles?${params.toString()}`,
+      {}
+    )
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async getRole(id: number): Promise<Role> {
+    const response = await this.request<Role>(`/api/v1/roles/${id}`, {})
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async createRole(data: CreateRoleRequest): Promise<Role> {
+    const response = await this.request<Role>('/api/v1/roles', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async updateRole(id: number, data: UpdateRoleRequest): Promise<Role> {
+    const response = await this.request<Role>(`/api/v1/roles/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async deleteRole(id: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/roles/${id}`, {
+      method: 'DELETE',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  async assignPermission(roleId: number, permissionId: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/roles/${roleId}/permissions`, {
+      method: 'POST',
+      body: JSON.stringify({ permission_id: permissionId }),
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  async removePermission(roleId: number, permissionId: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/roles/${roleId}/permissions/${permissionId}`, {
+      method: 'DELETE',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  // Permission management
+  async listPermissions(page = 1, pageSize = 10): Promise<{ permissions: Permission[]; total: number }> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    const response = await this.request<{ permissions: Permission[]; total: number }>(
+      `/api/v1/permissions?${params.toString()}`,
+      {}
+    )
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async createPermission(data: CreatePermissionRequest): Promise<Permission> {
+    const response = await this.request<Permission>('/api/v1/permissions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async updatePermission(id: number, data: UpdatePermissionRequest): Promise<Permission> {
+    const response = await this.request<Permission>(`/api/v1/permissions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async deletePermission(id: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/permissions/${id}`, {
+      method: 'DELETE',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  // OAuth applications
+  async listApplications(page = 1, pageSize = 10): Promise<{ applications: OAuthApplication[]; total: number }> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    const response = await this.request<{ applications: OAuthApplication[]; total: number }>(
+      `/api/v1/oauth/applications?${params.toString()}`,
+      {}
+    )
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async createApplication(data: CreateOAuthAppRequest): Promise<OAuthApplication> {
+    const response = await this.request<OAuthApplication>('/api/v1/oauth/applications', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async updateApplication(id: number, data: UpdateOAuthAppRequest): Promise<OAuthApplication> {
+    const response = await this.request<OAuthApplication>(`/api/v1/oauth/applications/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async deleteApplication(id: number): Promise<void> {
+    const response = await this.request<void>(`/api/v1/oauth/applications/${id}`, {
+      method: 'DELETE',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  // Audit logs
+  async listAuditLogs(page = 1, pageSize = 10, filters?: { action?: string; resource?: string; search?: string }): Promise<{ logs: AuditLog[]; total: number }> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    if (filters?.action) params.set('action', filters.action)
+    if (filters?.resource) params.set('resource', filters.resource)
+    if (filters?.search) params.set('search', filters.search)
+
+    const response = await this.request<{ logs: AuditLog[]; total: number }>(
+      `/api/v1/audit-logs?${params.toString()}`,
+      {}
+    )
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
     return response.data
   }
 }

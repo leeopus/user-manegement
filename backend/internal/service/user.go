@@ -17,9 +17,10 @@ type UserService interface {
 	CreateUser(username, email, password string, auditCtx dto.AuditContext) (*repository.User, error)
 	GetUser(id uint, currentUserID uint) (*repository.User, error)
 	UpdateUser(id uint, username, email string, currentUserID uint, auditCtx dto.AuditContext) (*repository.User, error)
+	UpdateUserStatus(id, currentUserID uint, status string, auditCtx dto.AuditContext) error
 	DeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error
 	HardDeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error
-	ListUsers(offset, pageSize int) ([]repository.User, int64, error)
+	ListUsers(offset, pageSize int, filters repository.UserFilters) ([]repository.User, int64, error)
 	AssignRole(userID, roleID uint, auditCtx dto.AuditContext) error
 	RemoveRole(userID, roleID uint, auditCtx dto.AuditContext) error
 }
@@ -181,6 +182,55 @@ func (s *userService) UpdateUser(id uint, username, email string, currentUserID 
 	return user, nil
 }
 
+func (s *userService) UpdateUserStatus(id, currentUserID uint, status string, auditCtx dto.AuditContext) error {
+	if id == currentUserID {
+		return apperrors.ErrCannotDeleteSelf
+	}
+
+	if status != StatusActive && status != StatusDisabled {
+		return apperrors.ErrInvalidStatus.WithDetails(map[string]interface{}{
+			"reason": "status must be 'active' or 'disabled'",
+		})
+	}
+
+	user, err := s.userRepo.FindByID(id)
+	if err != nil {
+		return apperrors.ErrUserNotFound
+	}
+
+	oldStatus := user.Status
+	if oldStatus == status {
+		return nil
+	}
+
+	if err := s.userRepo.UpdateStatus(id, status); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	if status == StatusDisabled {
+		if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
+			zap.L().Warn("Failed to revoke refresh tokens on disable", zap.Uint("user_id", id), zap.Error(err))
+		}
+		if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
+			zap.L().Warn("Failed to blacklist user tokens on disable", zap.Uint("user_id", id), zap.Error(err))
+		}
+	}
+
+	_ = s.rbacCache.InvalidateUserRoles(id)
+
+	s.auditLogger.Log(&dto.AuditContext{
+		UserID:    auditCtx.UserID,
+		IPAddress: auditCtx.IPAddress,
+		UserAgent: auditCtx.UserAgent,
+	}, "update_user_status", "user", map[string]interface{}{
+		"target_id":   id,
+		"old_status":  oldStatus,
+		"new_status":  status,
+	})
+
+	return nil
+}
+
 func (s *userService) DeleteUser(id uint, currentUserID uint, auditCtx dto.AuditContext) error {
 	if id == currentUserID {
 		return apperrors.ErrCannotDeleteSelf
@@ -274,8 +324,8 @@ func (s *userService) HardDeleteUser(id uint, currentUserID uint, auditCtx dto.A
 	return nil
 }
 
-func (s *userService) ListUsers(offset, pageSize int) ([]repository.User, int64, error) {
-	return s.userRepo.List(offset, pageSize)
+func (s *userService) ListUsers(offset, pageSize int, filters repository.UserFilters) ([]repository.User, int64, error) {
+	return s.userRepo.List(offset, pageSize, filters)
 }
 
 func (s *userService) AssignRole(userID, roleID uint, auditCtx dto.AuditContext) error {

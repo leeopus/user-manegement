@@ -142,6 +142,7 @@ func main() {
 	roleHandler := handler.NewRoleHandler(roleService)
 	permissionHandler := handler.NewPermissionHandler(permissionService)
 	oauthHandler := handler.NewOAuthHandler(oauthService)
+	auditHandler := handler.NewAuditHandler(auditLogRepo)
 	csrfHandler := handler.NewCSRFHandler(redis.Client)
 	passwordHandler := handler.NewPasswordHandler(passwordService)
 
@@ -195,8 +196,11 @@ func main() {
 			users.GET("/:id", userHandler.GetUser)
 			users.POST("", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.CreateUser)
 			users.PUT("/:id", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.UpdateUser)
+				users.PUT("/:id/status", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.UpdateUserStatus)
 			users.DELETE("/:id", middleware.RequirePermission(rbacCfg, service.PermUserDelete), userHandler.DeleteUser)
 			users.DELETE("/:id/hard", middleware.RequirePermission(rbacCfg, service.PermUserDelete), userHandler.HardDeleteUser)
+			users.POST("/:id/roles", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.AssignRole)
+			users.DELETE("/:id/roles/:roleId", middleware.RequirePermission(rbacCfg, service.PermUserWrite), userHandler.RemoveRole)
 		}
 
 		roles := v1.Group("/roles")
@@ -207,6 +211,8 @@ func main() {
 			roles.POST("", roleHandler.CreateRole)
 			roles.PUT("/:id", roleHandler.UpdateRole)
 			roles.DELETE("/:id", roleHandler.DeleteRole)
+			roles.POST("/:id/permissions", roleHandler.AssignPermission)
+			roles.DELETE("/:id/permissions/:permissionId", roleHandler.RemovePermission)
 		}
 
 		permissions := v1.Group("/permissions")
@@ -234,6 +240,12 @@ func main() {
 			oauthApps.POST("", oauthHandler.CreateApplication)
 			oauthApps.PUT("/:id", oauthHandler.UpdateApplication)
 			oauthApps.DELETE("/:id", oauthHandler.DeleteApplication)
+		}
+
+		auditLogs := v1.Group("/audit-logs")
+		auditLogs.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermAuditRead))
+		{
+			auditLogs.GET("", auditHandler.ListAuditLogs)
 		}
 	}
 

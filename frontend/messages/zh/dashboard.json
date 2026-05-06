@@ -12,5 +12,6 @@
   "totalRoles": "总角色数",
   "ssoApplications": "SSO 应用数",
   "overview": "概览",
-  "statistics": "统计信息"
+  "statistics": "统计信息",
+  "auditLogs": "审计日志"
 }

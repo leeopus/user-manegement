@@ -12,5 +12,6 @@
   "totalRoles": "Total Roles",
   "ssoApplications": "SSO Applications",
   "overview": "Overview",
-  "statistics": "Statistics"
+  "statistics": "Statistics",
+  "auditLogs": "Audit Logs"
 }

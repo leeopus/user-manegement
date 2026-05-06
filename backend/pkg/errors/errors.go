@@ -344,6 +344,12 @@ var (
 		"USER_CANNOT_DELETE_SELF",
 		http.StatusBadRequest,
 	)
+
+	ErrInvalidStatus = New(
+		"USER_INVALID_STATUS_400",
+		"USER_INVALID_STATUS",
+		http.StatusBadRequest,
+	)
 )
 
 // IsAppError 判断是否为应用错误

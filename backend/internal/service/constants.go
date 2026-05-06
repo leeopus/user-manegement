@@ -3,6 +3,7 @@ package service
 const (
 	// User status
 	StatusActive   = "active"
+	StatusDisabled = "disabled"
 	StatusInactive = "inactive"
 	StatusBanned   = "banned"
 	StatusDeleted  = "deleted"
@@ -22,4 +23,5 @@ const (
 	PermRoleManage     = "roles:manage"
 	PermPermissionManage = "permissions:manage"
 	PermOAuthManage    = "oauth:manage"
+	PermAuditRead      = "audit:read"
 )

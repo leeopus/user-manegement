@@ -19,10 +19,18 @@ type AuditLog struct {
 	User       User   `gorm:"foreignKey:UserID"`
 }
 
+type AuditLogFilters struct {
+	UserID   uint
+	Action   string
+	Resource string
+	Search   string
+}
+
 type AuditLogRepository interface {
 	Create(log *AuditLog) error
 	FindByUserID(userID uint, offset, limit int) ([]AuditLog, int64, error)
 	List(offset, limit int) ([]AuditLog, int64, error)
+	ListFiltered(offset, limit int, filters AuditLogFilters) ([]AuditLog, int64, error)
 }
 
 type auditLogRepository struct {
@@ -50,14 +58,33 @@ func (r *auditLogRepository) FindByUserID(userID uint, offset, limit int) ([]Aud
 }
 
 func (r *auditLogRepository) List(offset, limit int) ([]AuditLog, int64, error) {
+	return r.ListFiltered(offset, limit, AuditLogFilters{})
+}
+
+func (r *auditLogRepository) ListFiltered(offset, limit int, filters AuditLogFilters) ([]AuditLog, int64, error) {
 	var logs []AuditLog
 	var total int64
 
-	if err := r.db.Model(&AuditLog{}).Count(&total).Error; err != nil {
+	query := r.db.Model(&AuditLog{})
+	if filters.UserID > 0 {
+		query = query.Where("user_id = ?", filters.UserID)
+	}
+	if filters.Action != "" {
+		query = query.Where("action = ?", filters.Action)
+	}
+	if filters.Resource != "" {
+		query = query.Where("resource = ?", filters.Resource)
+	}
+	if filters.Search != "" {
+		search := "%" + filters.Search + "%"
+		query = query.Where("action ILIKE ? OR resource ILIKE ? OR details ILIKE ?", search, search, search)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err := r.db.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	err := query.Preload("User").Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
 	return logs, total, err
 }
 
