@@ -30,10 +30,12 @@ func NewOAuthHandler(oauthService service.OAuthService) OAuthHandler {
 }
 
 type AuthorizeRequest struct {
-	ClientID    string `json:"client_id" binding:"required"`
-	RedirectURI string `json:"redirect_uri" binding:"required"`
-	State       string `json:"state" binding:"required"`
-	Scope       string `json:"scope"`
+	ClientID            string `json:"client_id" binding:"required"`
+	RedirectURI         string `json:"redirect_uri" binding:"required"`
+	State               string `json:"state" binding:"required"`
+	Scope               string `json:"scope"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
 }
 
 type TokenRequest struct {
@@ -41,6 +43,7 @@ type TokenRequest struct {
 	ClientSecret string `json:"client_secret" binding:"required"`
 	Code         string `json:"code" binding:"required"`
 	RedirectURI  string `json:"redirect_uri" binding:"required"`
+	CodeVerifier string `json:"code_verifier"`
 }
 
 type CreateApplicationRequest struct {
@@ -72,7 +75,7 @@ func (h *oauthHandler) Authorize(c *gin.Context) {
 		return
 	}
 
-	code, err := h.oauthService.Authorize(userID, req.ClientID, req.RedirectURI, req.State, req.Scope, c.ClientIP(), c.GetHeader("User-Agent"))
+	code, err := h.oauthService.Authorize(userID, req.ClientID, req.RedirectURI, req.State, req.Scope, req.CodeChallenge, req.CodeChallengeMethod, c.ClientIP(), c.GetHeader("User-Agent"))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -91,7 +94,7 @@ func (h *oauthHandler) Token(c *gin.Context) {
 		return
 	}
 
-	accessToken, _, err := h.oauthService.Token(req.ClientID, req.ClientSecret, req.Code, req.RedirectURI)
+	accessToken, _, err := h.oauthService.Token(req.ClientID, req.ClientSecret, req.Code, req.RedirectURI, req.CodeVerifier)
 	if err != nil {
 		response.Error(c, err)
 		return

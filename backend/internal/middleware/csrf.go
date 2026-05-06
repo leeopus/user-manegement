@@ -30,7 +30,7 @@ func CSRF(redisClient *redis.Client) gin.HandlerFunc {
 		// 获取当前 session 指纹用于验证绑定
 		sessionID := dto.SessionFingerprint(c)
 
-		// 验证 token（验证后自动删除，实现一次性使用）
+		// 验证 token（Token 在 TTL 内可复用，前端每次请求获取新 token）
 		if err := csrfMgr.ValidateToken(token, sessionID); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,

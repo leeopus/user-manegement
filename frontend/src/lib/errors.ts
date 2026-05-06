@@ -112,3 +112,17 @@ export function isNetworkError(error: unknown): boolean {
   }
   return false
 }
+
+/**
+ * 判断是否为服务端错误（5xx），用于区分临时故障和认证失败
+ */
+export function isServerError(error: unknown): boolean {
+  if (error instanceof APIException) {
+    const status = error.getHTTPStatus()
+    return status >= 500 && status < 600
+  }
+  if (error instanceof Error && error.message.startsWith('NETWORK_ERROR:')) {
+    return true
+  }
+  return false
+}

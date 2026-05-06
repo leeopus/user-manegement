@@ -217,10 +217,20 @@ func CSRFTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
+// PasswordChangeRateLimit 密码修改端点专用限流（防止 session 劫持后暴力猜密码）
+func PasswordChangeRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   5,
+		Window:        15 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	})
+}
+
 // GetRemainingAttempts 获取剩余尝试次数
-func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string) (int, error) {
+func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string, maxRequests int) (int, error) {
 	if rl.redis == nil {
-		return 3, nil
+		return maxRequests, nil
 	}
 
 	ctx := context.Background()
@@ -230,12 +240,16 @@ func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string) (int, error) 
 	count, err := rl.redis.ZCard(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return 3, nil
+			return maxRequests, nil
 		}
 		return 0, err
 	}
 
-	return 3 - int(count), nil
+	remaining := maxRequests - int(count)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, nil
 }
 
 // ResetRateLimit 重置限流（管理员功能）

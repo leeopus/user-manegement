@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/viper"
 )
@@ -142,6 +144,10 @@ func Load(configPath string) error {
 		return fmt.Errorf("JWT_SECRET must be at least 32 bytes, got %d — generate with: openssl rand -hex 32", len(AppConfig.JWT.Secret))
 	}
 
+	if err := validateJWTSecretEntropy(AppConfig.JWT.Secret); err != nil {
+		return err
+	}
+
 	// release 模式强制启用 Cookie Secure
 	if AppConfig.Server.GinMode == "release" && !AppConfig.Security.CookieSecure {
 		return fmt.Errorf("COOKIE_SECURE must be true in release mode — HTTP cookies without Secure flag expose tokens to network interception")
@@ -186,4 +192,52 @@ func (c *Config) GetIntEnv(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+// wellKnownWeakSecrets 常见的弱 JWT Secret 占位符
+var wellKnownWeakSecrets = []string{
+	"your-super-secret-jwt-key-change-in-production",
+	"secret", "jwt-secret", "my-secret", "change-me",
+	"super-secret", "jwt_secret", "your-secret-key",
+	"example-secret", "test-secret", "default-secret",
+}
+
+// validateJWTSecretEntropy 校验 JWT Secret 的熵和安全性
+func validateJWTSecretEntropy(secret string) error {
+	lower := strings.ToLower(strings.TrimSpace(secret))
+
+	for _, weak := range wellKnownWeakSecrets {
+		if lower == strings.ToLower(weak) {
+			return fmt.Errorf("JWT_SECRET is a known weak value (%q) — generate a strong random key with: openssl rand -hex 32", weak)
+		}
+	}
+
+	// 检查字符多样性：至少需要 3 种字符类型（大写、小写、数字、特殊字符）
+	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	for _, r := range secret {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+
+	charTypes := 0
+	for _, has := range []bool{hasUpper, hasLower, hasDigit, hasSpecial} {
+		if has {
+			charTypes++
+		}
+	}
+
+	if charTypes < 3 {
+		return fmt.Errorf("JWT_SECRET has insufficient character diversity (only %d types: upper=%v lower=%v digit=%v special=%v) — use a high-entropy random key from: openssl rand -hex 32",
+			charTypes, hasUpper, hasLower, hasDigit, hasSpecial)
+	}
+
+	return nil
 }

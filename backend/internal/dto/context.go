@@ -3,6 +3,7 @@ package dto
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/user-system/backend/internal/config"
@@ -56,7 +57,7 @@ func SessionFingerprint(c *gin.Context) string {
 		cookieSecure = true
 	}
 
-	c.SetSameSite(0) // http.SameSiteDefaultMode
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(
 		csrfSessionCookie,
 		sessionID,

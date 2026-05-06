@@ -52,23 +52,26 @@ type AuthService interface {
 	Logout(userID uint, refreshToken, accessToken string) error
 	LogoutAll(userID uint) error
 	GetCurrentUser(userID uint) (*repository.User, error)
+	ChangePassword(userID uint, currentPassword, newPassword string, auditCtx dto.AuditContext) error
 }
 
 type authService struct {
-	userRepo        repository.UserRepository
-	auditLogger     *AuditLogger
-	lockoutManager  *auth.AccountLockoutManager
-	refreshTokenMgr *auth.RefreshTokenManager
-	blacklistMgr    *auth.TokenBlacklistManager
+	userRepo            repository.UserRepository
+	passwordHistoryRepo repository.PasswordHistoryRepository
+	auditLogger         *AuditLogger
+	lockoutManager      *auth.AccountLockoutManager
+	refreshTokenMgr     *auth.RefreshTokenManager
+	blacklistMgr        *auth.TokenBlacklistManager
 }
 
-func NewAuthService(userRepo repository.UserRepository, auditLogger *AuditLogger, redisClient *redis.Client, blacklistMgr *auth.TokenBlacklistManager, refreshTokenMgr *auth.RefreshTokenManager) AuthService {
+func NewAuthService(userRepo repository.UserRepository, passwordHistoryRepo repository.PasswordHistoryRepository, auditLogger *AuditLogger, redisClient *redis.Client, blacklistMgr *auth.TokenBlacklistManager, refreshTokenMgr *auth.RefreshTokenManager) AuthService {
 	return &authService{
-		userRepo:        userRepo,
-		auditLogger:     auditLogger,
-		lockoutManager:  auth.NewAccountLockoutManager(redisClient),
-		refreshTokenMgr: refreshTokenMgr,
-		blacklistMgr:    blacklistMgr,
+		userRepo:            userRepo,
+		passwordHistoryRepo: passwordHistoryRepo,
+		auditLogger:         auditLogger,
+		lockoutManager:      auth.NewAccountLockoutManager(redisClient),
+		refreshTokenMgr:     refreshTokenMgr,
+		blacklistMgr:        blacklistMgr,
 	}
 }
 
@@ -297,6 +300,13 @@ func (s *authService) RefreshToken(refreshToken string) (*repository.User, strin
 		return nil, "", "", false, apperrors.ErrUserNotFound
 	}
 
+	if user.Status != "active" {
+		// 用户已被禁用/删除，撤销其所有 token
+		_ = s.refreshTokenMgr.RevokeAll(user.ID)
+		_ = s.blacklistMgr.RevokeAllUserTokens(user.ID)
+		return nil, "", "", false, apperrors.ErrAccountNotActive
+	}
+
 	// 从旧 refresh token 的 claims 中继承 RememberMe 状态
 	rememberMe := claims.RememberMe
 
@@ -407,4 +417,64 @@ func extractPlatform(userAgent string) string {
 	default:
 		return "desktop"
 	}
+}
+
+func (s *authService) ChangePassword(userID uint, currentPassword, newPassword string, auditCtx dto.AuditContext) error {
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return apperrors.ErrUserNotFound
+	}
+
+	if !utils.CheckPassword(currentPassword, user.PasswordHash) {
+		return apperrors.ErrCurrentPasswordIncorrect
+	}
+
+	if _, err := utils.ValidatePassword(newPassword, user.Username); err != nil {
+		return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+			"reason": err.Error(),
+		})
+	}
+
+	if utils.CheckPassword(newPassword, user.PasswordHash) {
+		return apperrors.ErrPasswordSameAsOld
+	}
+
+	histories, _ := s.passwordHistoryRepo.FindByUserID(user.ID, 5)
+	for _, h := range histories {
+		if utils.CheckPassword(newPassword, h.PasswordHash) {
+			return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+				"reason": "new password was used recently, please choose a different one",
+			})
+		}
+	}
+
+	hashedPassword, err := utils.HashPassword(newPassword)
+	if err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	user.PasswordHash = hashedPassword
+	now := time.Now()
+	user.PasswordChangedAt = &now
+	if err := s.userRepo.Update(user); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	if err := s.passwordHistoryRepo.Create(&repository.PasswordHistory{
+		UserID:       user.ID,
+		PasswordHash: hashedPassword,
+	}); err != nil {
+		zap.L().Warn("Failed to save password history on change", zap.Error(err))
+	}
+	_ = s.passwordHistoryRepo.CleanupOld(user.ID, 5)
+
+	// 密码修改后吊销所有已有 token，强制重新登录
+	_ = s.refreshTokenMgr.RevokeAll(user.ID)
+	_ = s.blacklistMgr.RevokeAllUserTokens(user.ID)
+
+	s.auditLogger.Log(&auditCtx, "change_password", "user", map[string]interface{}{
+		"user_id": user.ID,
+	})
+
+	return nil
 }

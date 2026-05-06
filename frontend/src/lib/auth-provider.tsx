@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { useRouter, usePathname } from '@/i18n/routing'
 import { api } from './api'
-import { isAuthError, isNetworkError } from './errors'
+import { isAuthError, isNetworkError, isServerError } from './errors'
 import type { User } from './types'
 
 interface AuthContextType {
@@ -43,11 +43,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setTimeout(() => initAuth(retriesLeft - 1), INIT_RETRY_DELAY_MS)
           return
         }
+        if (isServerError(error)) {
+          // 服务端 5xx 错误：临时故障，不登出用户，保持 loading 以显示错误状态
+          shouldKeepLoading = true
+          setTimeout(() => initAuth(retriesLeft - 1), INIT_RETRY_DELAY_MS * 3)
+          return
+        }
         if (isAuthError(error)) {
-          // 认证失败（401）：确实没有有效 session
+          // 认证失败（401/403）：确实没有有效 session
           setUser(null)
         } else {
-          // 其他错误（服务器 500 等）：不登出用户，仅标记加载完成
+          // 其他不可恢复的错误：清除用户状态
           setUser(null)
         }
       } finally {
@@ -93,7 +99,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const currentUser = await api.getUserInfo()
       setUser(currentUser)
-    } catch {
+    } catch (error) {
+      if (isNetworkError(error) || isServerError(error)) {
+        // 网络波动或服务端临时故障，保持现有用户状态
+        return
+      }
+      // 认证错误（401/403）等不可恢复错误，清除用户状态
       setUser(null)
     }
   }, [])

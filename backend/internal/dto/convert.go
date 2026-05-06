@@ -1,6 +1,11 @@
 package dto
 
-import "github.com/user-system/backend/internal/repository"
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/user-system/backend/internal/repository"
+)
 
 // ToUserResponse 将 User 模型转换为公开响应（不包含 LastLoginIP 等敏感信息）
 func ToUserResponse(user *repository.User) UserResponse {
@@ -94,7 +99,7 @@ func ToUserWithRolesResponseList(users []repository.User) []UserWithRolesRespons
 	return result
 }
 
-// ToAuditLogResponse 将 AuditLog 模型转换为公开响应
+// ToAuditLogResponse 将 AuditLog 模型转换为公开响应（脱敏 details 中的邮箱等敏感字段）
 func ToAuditLogResponse(log *repository.AuditLog) AuditLogResponse {
 	username := ""
 	if log.User.ID > 0 {
@@ -107,10 +112,45 @@ func ToAuditLogResponse(log *repository.AuditLog) AuditLogResponse {
 		Action:     log.Action,
 		Resource:   log.Resource,
 		ResourceID: log.ResourceID,
-		Details:    log.Details,
+		Details:    maskSensitiveDetails(log.Details),
 		IPAddress:  log.IPAddress,
 		UserAgent:  log.UserAgent,
 		RequestID:  log.RequestID,
 		CreatedAt:  log.CreatedAt,
 	}
+}
+
+// maskSensitiveDetails 对 details JSON 中的邮箱等敏感字段做脱敏
+// 如 "user@example.com" → "u***@example.com"
+func maskSensitiveDetails(details string) string {
+	if details == "" {
+		return details
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(details), &m); err != nil {
+		return details
+	}
+	for key, val := range m {
+		s, ok := val.(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(strings.ToLower(key), "email") && strings.Contains(s, "@") {
+			m[key] = maskEmail(s)
+		}
+	}
+	masked, err := json.Marshal(m)
+	if err != nil {
+		return details
+	}
+	return string(masked)
+}
+
+// maskEmail 将邮箱脱敏为 a***@domain.com 格式
+func maskEmail(email string) string {
+	at := strings.Index(email, "@")
+	if at <= 0 {
+		return email
+	}
+	return string(email[0]) + "***" + email[at:]
 }

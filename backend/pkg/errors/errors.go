@@ -117,6 +117,19 @@ var (
 		"AUTH_TOKEN_EXPIRED",
 		http.StatusUnauthorized,
 	)
+
+	// 修改密码错误
+	ErrCurrentPasswordIncorrect = New(
+		"AUTH_PASSWORD_CURRENT_INCORRECT_400",
+		"AUTH_PASSWORD_CURRENT_INCORRECT",
+		http.StatusBadRequest,
+	)
+
+	ErrPasswordSameAsOld = New(
+		"AUTH_PASSWORD_SAME_AS_OLD_400",
+		"AUTH_PASSWORD_SAME_AS_OLD",
+		http.StatusBadRequest,
+	)
 )
 
 // =====================================================

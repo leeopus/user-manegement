@@ -50,6 +50,7 @@ type UserFilters struct {
 type UserRepository interface {
 	Create(user *User) error
 	FindByID(id uint) (*User, error)
+	FindByIDUnscoped(id uint) (*User, error)
 	FindByIDWithRoles(id uint) (*User, error)
 	FindByEmail(email string) (*User, error)
 	FindByEmailWithRoles(email string) (*User, error)
@@ -86,6 +87,16 @@ func (r *userRepository) Create(user *User) error {
 func (r *userRepository) FindByID(id uint) (*User, error) {
 	var user User
 	err := r.db.First(&user, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// FindByIDUnscoped 加载用户信息（包含已软删除的记录）
+func (r *userRepository) FindByIDUnscoped(id uint) (*User, error) {
+	var user User
+	err := r.db.Unscoped().First(&user, id).Error
 	if err != nil {
 		return nil, err
 	}

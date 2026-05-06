@@ -26,6 +26,7 @@ type AuthHandler interface {
 	Logout(c *gin.Context)
 	RefreshToken(c *gin.Context)
 	GetCurrentUser(c *gin.Context)
+	ChangePassword(c *gin.Context)
 }
 
 type authHandler struct {
@@ -37,12 +38,12 @@ func NewAuthHandler(authService service.AuthService) AuthHandler {
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8,max=64"`
+	Email    string `json:"email" binding:"required"`
+	Password string `json:"password" binding:"required"`
 }
 
 type LoginRequest struct {
-	Email      string `json:"email" binding:"required,email"`
+	Email      string `json:"email" binding:"required"`
 	Password   string `json:"password" binding:"required"`
 	RememberMe bool   `json:"remember_me"`
 }
@@ -92,14 +93,11 @@ func (h *authHandler) Login(c *gin.Context) {
 	}
 
 	cfg := config.Get()
+	accessTTL := time.Duration(cfg.Security.AccessTokenMaxTTLMin) * time.Minute
 	refreshTTL := cfg.GetRefreshTokenTTL()
-	if req.RememberMe {
-		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, 7*24*time.Hour)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
-	} else {
-		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, time.Duration(cfg.Security.AccessTokenMaxTTLMin)*time.Minute)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
-	}
+
+	jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, accessTTL)
+	jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
 
 	response.Success(c, gin.H{
 		"user": dto.ToUserWithRolesResponse(user),
@@ -137,22 +135,19 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	user, newAccessToken, newRefreshToken, rememberMe, err := h.authService.RefreshToken(refreshToken)
+	user, newAccessToken, newRefreshToken, _, err := h.authService.RefreshToken(refreshToken)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 
-	// 根据 RememberMe 状态设置与登录时一致的 cookie 时长
+	// Access Token Cookie 始终对齐 JWT TTL；RememberMe 仅影响 Refresh Token
 	cfg := config.Get()
+	accessTTL := time.Duration(cfg.Security.AccessTokenMaxTTLMin) * time.Minute
 	refreshTTL := cfg.GetRefreshTokenTTL()
-	if rememberMe {
-		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, 7*24*time.Hour)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
-	} else {
-		jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, time.Duration(cfg.Security.AccessTokenMaxTTLMin)*time.Minute)
-		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
-	}
+
+	jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, accessTTL)
+	jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
 
 	response.Success(c, gin.H{
 		"user": dto.ToUserResponse(user),
@@ -174,4 +169,36 @@ func (h *authHandler) GetCurrentUser(c *gin.Context) {
 	}
 
 	response.Success(c, dto.ToUserWithRolesResponse(user))
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required"`
+}
+
+func (h *authHandler) ChangePassword(c *gin.Context) {
+	userIDVal, _ := c.Get("user_id")
+	userID, ok := userIDVal.(uint)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ValidationError(c, err.Error())
+		return
+	}
+
+	auditCtx := dto.NewAuditContext(c, userID)
+	if err := h.authService.ChangePassword(userID, req.CurrentPassword, req.NewPassword, auditCtx); err != nil {
+		response.Error(c, err)
+		return
+	}
+
+	jwt.ClearAllTokenCookies(c)
+
+	response.Success(c, gin.H{
+		"message": "password_changed",
+	})
 }

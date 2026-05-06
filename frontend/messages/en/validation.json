@@ -16,6 +16,10 @@
     "required": "Password is required",
     "minLength": "Password must be at least 8 characters",
     "maxLength": "Password must be at most 64 characters",
+    "requireUpper": "Password must contain uppercase letters",
+    "requireLower": "Password must contain lowercase letters",
+    "requireNumber": "Password must contain numbers",
+    "requireSpecial": "Password must contain special characters",
     "lowercase": "Password must contain lowercase letters",
     "number": "Password must contain numbers",
     "containsUsername": "Password cannot contain username",
@@ -25,10 +29,10 @@
     "match": "Passwords match"
   },
   "passwordStrength": "Password strength",
-  "passwordRequirements": "Password suggestions (optional):",
+  "passwordRequirements": "Password requirements:",
   "requirements": {
     "length": "At least 8 characters",
-    "complexity": "Contains lowercase letters and numbers",
+    "complexity": "Must contain uppercase, lowercase letters and numbers",
     "unique": "Cannot contain username",
     "suggestion": "Special characters recommended for stronger security"
   }

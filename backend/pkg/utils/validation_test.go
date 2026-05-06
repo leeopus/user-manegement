@@ -83,12 +83,13 @@ func TestValidatePassword(t *testing.T) {
 		{"valid without special", "MyPass123", "user", false},
 		{"too short", "Ab1", "user", true},
 		{"too long", "Aa1" + strings.Repeat("x", 62), "user", true},
-		{"no uppercase - allowed (NIST)", "mypassword1", "user", false},
-		{"no lowercase - allowed (NIST)", "MYPASSWORD1", "user", false},
-		{"no number - allowed (NIST)", "MyPassword", "user", false},
-		{"long passphrase (NIST)", "correcthorsebatterystaple", "user", false},
-		{"common password", "password", "user", true},
-		{"all same chars", "AAAAAAAAAAA", "user", true},
+		{"no uppercase", "mypassword1", "user", true},
+		{"no lowercase", "MYPASSWORD1", "user", true},
+		{"no number", "MyPassword", "user", true},
+		{"long passphrase missing variety", "correcthorsebatterystaple", "user", true},
+		{"common password", "Password1", "user", true},
+		{"valid mixed", "Xk9mQwerty7z", "user", false},  // not all same, meets all requirements
+		{"truly all same chars", "aaaaaaaaaaaa", "user", true}, // all same + no upper/number
 		{"contains username", "MyUser123", "myuser", true},
 	}
 

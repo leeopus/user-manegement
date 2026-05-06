@@ -288,8 +288,8 @@ func (s *userService) HardDeleteUser(id uint, currentUserID uint, auditCtx dto.A
 		return apperrors.ErrCannotDeleteSelf
 	}
 
-	// 先读取用户信息用于审计日志
-	user, err := s.userRepo.FindByID(id)
+	// 使用 Unscoped 查询，确保能找到已软删除的用户
+	user, err := s.userRepo.FindByIDUnscoped(id)
 	if err != nil {
 		return apperrors.ErrUserNotFound
 	}
@@ -329,14 +329,18 @@ func (s *userService) ListUsers(offset, pageSize int, filters repository.UserFil
 }
 
 func (s *userService) AssignRole(userID, roleID uint, auditCtx dto.AuditContext) error {
-	if _, err := s.userRepo.FindByID(userID); err != nil {
-		return apperrors.ErrUserNotFound
-	}
-	if _, err := s.roleRepo.FindByID(roleID); err != nil {
-		return apperrors.ErrRoleNotFound
-	}
-
-	if err := s.roleRepo.AssignRoleToUser(userID, roleID); err != nil {
+	if err := s.userRepo.Transaction(func(tx *gorm.DB) error {
+		if _, err := s.userRepo.FindByIDWithTx(tx, userID); err != nil {
+			return apperrors.ErrUserNotFound
+		}
+		if _, err := s.roleRepo.FindByIDWithTx(tx, roleID); err != nil {
+			return apperrors.ErrRoleNotFound
+		}
+		return s.roleRepo.AssignRoleToUser(userID, roleID)
+	}); err != nil {
+		if appErr, ok := apperrors.IsAppError(err); ok {
+			return appErr
+		}
 		return apperrors.ErrInternalServer
 	}
 
@@ -357,11 +361,15 @@ func (s *userService) AssignRole(userID, roleID uint, auditCtx dto.AuditContext)
 }
 
 func (s *userService) RemoveRole(userID, roleID uint, auditCtx dto.AuditContext) error {
-	if _, err := s.userRepo.FindByID(userID); err != nil {
-		return apperrors.ErrUserNotFound
-	}
-
-	if err := s.roleRepo.RemoveRoleFromUser(userID, roleID); err != nil {
+	if err := s.userRepo.Transaction(func(tx *gorm.DB) error {
+		if _, err := s.userRepo.FindByIDWithTx(tx, userID); err != nil {
+			return apperrors.ErrUserNotFound
+		}
+		return s.roleRepo.RemoveRoleFromUser(userID, roleID)
+	}); err != nil {
+		if appErr, ok := apperrors.IsAppError(err); ok {
+			return appErr
+		}
 		return apperrors.ErrInternalServer
 	}
 

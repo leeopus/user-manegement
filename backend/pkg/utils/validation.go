@@ -34,9 +34,9 @@ type PasswordPolicy struct {
 var DefaultPasswordPolicy = PasswordPolicy{
 	MinLength:      8,
 	MaxLength:      64,
-	RequireUpper:   false,
-	RequireLower:   false,
-	RequireNumber:  false,
+	RequireUpper:   true,
+	RequireLower:   true,
+	RequireNumber:  true,
 	RequireSpecial: false,
 	ForbidUsername: true,
 }

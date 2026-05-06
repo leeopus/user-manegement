@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -24,8 +26,8 @@ type OAuthService interface {
 	UpdateApplication(id uint, name, redirectURIs string, auditCtx dto.AuditContext) (*repository.OAuthApplication, error)
 	DeleteApplication(id uint, auditCtx dto.AuditContext) error
 	ListApplications(offset, pageSize int) ([]repository.OAuthApplication, int64, error)
-	Authorize(userID uint, clientID, redirectURI, state, scope, ipAddress, userAgent string) (string, error)
-	Token(clientID, clientSecret, code, redirectURI string) (string, string, error)
+	Authorize(userID uint, clientID, redirectURI, state, scope, codeChallenge, codeChallengeMethod, ipAddress, userAgent string) (string, error)
+	Token(clientID, clientSecret, code, redirectURI, codeVerifier string) (string, string, error)
 	Userinfo(accessToken string) (*repository.User, error)
 	UserinfoByID(userID uint) (*repository.User, error)
 }
@@ -51,11 +53,13 @@ func NewOAuthService(appRepo repository.OAuthApplicationRepository, tokenRepo re
 }
 
 type authorizationCodeData struct {
-	ClientID    string `json:"client_id"`
-	UserID      uint   `json:"user_id"`
-	RedirectURI string `json:"redirect_uri"`
-	State       string `json:"state"`
-	Scope       string `json:"scope"`
+	ClientID           string `json:"client_id"`
+	UserID             uint   `json:"user_id"`
+	RedirectURI        string `json:"redirect_uri"`
+	State              string `json:"state"`
+	Scope              string `json:"scope"`
+	CodeChallenge      string `json:"code_challenge,omitempty"`
+	CodeChallengeMethod string `json:"code_challenge_method,omitempty"`
 }
 
 func (s *oauthService) CreateApplication(name, redirectURIs, scopes string, auditCtx dto.AuditContext) (*repository.OAuthApplication, string, error) {
@@ -77,7 +81,6 @@ func (s *oauthService) CreateApplication(name, redirectURIs, scopes string, audi
 		return nil, "", apperrors.ErrInternalServer
 	}
 
-	// 验证 redirect URIs
 	for _, uri := range strings.Split(redirectURIs, ",") {
 		trimmed := strings.TrimSpace(uri)
 		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
@@ -115,9 +118,18 @@ func (s *oauthService) CreateApplication(name, redirectURIs, scopes string, audi
 	return app, rawSecret, nil
 }
 
-func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scope, ipAddress, userAgent string) (string, error) {
+func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scope, codeChallenge, codeChallengeMethod, ipAddress, userAgent string) (string, error) {
 	if state == "" {
 		return "", apperrors.ErrOAuthInvalidState
+	}
+
+	// PKCE 校验：如果提供了 code_challenge，必须指定 method
+	if codeChallenge != "" {
+		if codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
+			return "", apperrors.ErrOAuthInvalidScope.WithDetails(map[string]interface{}{
+				"reason": "code_challenge_method must be S256 or plain",
+			})
+		}
 	}
 
 	app, err := s.appRepo.FindByClientID(clientID)
@@ -150,11 +162,13 @@ func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scop
 	}
 
 	codeData := authorizationCodeData{
-		ClientID:    clientID,
-		UserID:      userID,
-		RedirectURI: redirectURI,
-		State:       state,
-		Scope:       scope,
+		ClientID:            clientID,
+		UserID:              userID,
+		RedirectURI:         redirectURI,
+		State:               state,
+		Scope:               scope,
+		CodeChallenge:       codeChallenge,
+		CodeChallengeMethod: codeChallengeMethod,
 	}
 	codeDataJSON, _ := json.Marshal(codeData)
 
@@ -180,7 +194,7 @@ func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scop
 	return code, nil
 }
 
-func (s *oauthService) Token(clientID, clientSecret, code, redirectURI string) (string, string, error) {
+func (s *oauthService) Token(clientID, clientSecret, code, redirectURI, codeVerifier string) (string, string, error) {
 	app, err := s.appRepo.FindByClientID(clientID)
 	if err != nil {
 		return "", "", apperrors.ErrOAuthInvalidClient
@@ -229,6 +243,27 @@ func (s *oauthService) Token(clientID, clientSecret, code, redirectURI string) (
 
 	if codeData.RedirectURI != redirectURI {
 		return "", "", apperrors.ErrOAuthInvalidRedirectURI
+	}
+
+	// 兑换时再次校验 redirect URI 的 DNS 解析，防止创建应用与实际兑换之间 DNS 被重绑定
+	if err := validateRedirectURIIsPublic(redirectURI); err != nil {
+		return "", "", apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
+			"reason": err.Error(),
+		})
+	}
+
+	// PKCE 验证：如果 authorize 时设置了 code_challenge，token 兑换时必须提供 code_verifier
+	if codeData.CodeChallenge != "" {
+		if codeVerifier == "" {
+			return "", "", apperrors.ErrOAuthInvalidCode.WithDetails(map[string]interface{}{
+				"reason": "code_verifier is required",
+			})
+		}
+		if !verifyPKCECodeVerifier(codeVerifier, codeData.CodeChallenge, codeData.CodeChallengeMethod) {
+			return "", "", apperrors.ErrOAuthInvalidCode.WithDetails(map[string]interface{}{
+				"reason": "code_verifier mismatch",
+			})
+		}
 	}
 
 	user, err := s.userRepo.FindByID(codeData.UserID)
@@ -301,7 +336,6 @@ func (s *oauthService) UpdateApplication(id uint, name, redirectURIs string, aud
 	if err != nil {
 		return nil, apperrors.ErrOAuthInvalidClient
 	}
-	// 验证每个 redirect URI 格式
 	for _, uri := range strings.Split(redirectURIs, ",") {
 		trimmed := strings.TrimSpace(uri)
 		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
@@ -309,9 +343,6 @@ func (s *oauthService) UpdateApplication(id uint, name, redirectURIs string, aud
 				"reason": "redirect URI must use http or https protocol",
 			})
 		}
-	}
-	for _, uri := range strings.Split(redirectURIs, ",") {
-		trimmed := strings.TrimSpace(uri)
 		if err := validateRedirectURIIsPublic(trimmed); err != nil {
 			return nil, apperrors.ErrOAuthInvalidRedirectURI.WithDetails(map[string]interface{}{
 				"reason": err.Error(),
@@ -393,7 +424,7 @@ func validateRedirectURIIsPublic(rawURI string) error {
 
 	// 拒绝明显的主机名模式
 	lowerHost := strings.ToLower(host)
-	internalHostnames := []string{"localhost", "0.0.0.0", "[::1]", "metadata.google.internal", "169.254.169.254"}
+	internalHostnames := []string{"localhost", "0.0.0.0", "::1", "metadata.google.internal", "169.254.169.254"}
 	for _, h := range internalHostnames {
 		if lowerHost == h {
 			return fmt.Errorf("redirect URI must not point to internal address: %s", host)
@@ -436,4 +467,18 @@ func checkIPNotInternal(ip net.IP, host string) error {
 		return fmt.Errorf("redirect URI must not point to internal/private IP: %s", host)
 	}
 	return nil
+}
+
+// verifyPKCECodeVerifier 验证 PKCE code_verifier 是否匹配 code_challenge（RFC 7636）
+func verifyPKCECodeVerifier(codeVerifier, codeChallenge, method string) bool {
+	switch method {
+	case "S256":
+		hash := sha256.Sum256([]byte(codeVerifier))
+		encoded := base64.RawURLEncoding.EncodeToString(hash[:])
+		return encoded == codeChallenge
+	case "plain":
+		return codeVerifier == codeChallenge
+	default:
+		return false
+	}
 }

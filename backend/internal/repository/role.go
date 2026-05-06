@@ -19,6 +19,7 @@ type Role struct {
 type RoleRepository interface {
 	Create(role *Role) error
 	FindByID(id uint) (*Role, error)
+	FindByIDWithTx(tx *gorm.DB, id uint) (*Role, error)
 	FindByCode(code string) (*Role, error)
 	Update(role *Role) error
 	Delete(id uint) error
@@ -45,6 +46,15 @@ func (r *roleRepository) Create(role *Role) error {
 func (r *roleRepository) FindByID(id uint) (*Role, error) {
 	var role Role
 	err := r.db.Preload("Permissions").First(&role, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &role, nil
+}
+
+func (r *roleRepository) FindByIDWithTx(tx *gorm.DB, id uint) (*Role, error) {
+	var role Role
+	err := tx.Preload("Permissions").First(&role, id).Error
 	if err != nil {
 		return nil, err
 	}

@@ -53,7 +53,11 @@ func main() {
 	}
 
 	if err := redis.InitRedis(cfg.Redis.URL); err != nil {
-		zap.L().Warn("Failed to connect to Redis, rate limiting will be disabled", zap.Error(err))
+		if cfg.Server.GinMode == "release" {
+			zap.L().Fatal("Redis connection required in release mode — rate limiting, token blacklist, CSRF, and account lockout all depend on it",
+				zap.Error(err))
+		}
+		zap.L().Warn("Failed to connect to Redis, security features will be degraded", zap.Error(err))
 	}
 	defer redis.Close()
 
@@ -102,6 +106,10 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	roleRepo := repository.NewRoleRepository(db)
 	permissionRepo := repository.NewPermissionRepository(db)
+
+	// Seed 默认权限、角色和初始管理员（幂等，可安全重复执行）
+	service.SeedDefaults(db, userRepo, roleRepo, permissionRepo)
+
 	oauthAppRepo := repository.NewOAuthApplicationRepository(db)
 	oauthTokenRepo := repository.NewOAuthTokenRepository(db)
 	asyncAuditRepo := audit.NewAsyncAuditLogRepository(repository.NewAuditLogRepository(db))
@@ -125,7 +133,7 @@ func main() {
 	blacklistMgr := auth.NewTokenBlacklistManager(redis.Client)
 	refreshTokenMgr := auth.NewRefreshTokenManager(redis.Client)
 
-	authService := service.NewAuthService(userRepo, auditLogger, redis.Client, blacklistMgr, refreshTokenMgr)
+	authService := service.NewAuthService(userRepo, passwordHistoryRepo, auditLogger, redis.Client, blacklistMgr, refreshTokenMgr)
 	userService := service.NewUserService(userRepo, roleRepo, auditLogger, rbacCache, blacklistMgr, refreshTokenMgr)
 	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogger, rbacCache)
 	permissionService := service.NewPermissionService(permissionRepo, auditLogger, rbacCache)
@@ -194,6 +202,7 @@ func main() {
 			auth.POST("/logout", middleware.Auth(blacklistMgr), authHandler.Logout)
 			auth.POST("/refresh", middleware.CSRF(redis.Client), middleware.RefreshRateLimit(redis.Client), authHandler.RefreshToken)
 			auth.GET("/me", middleware.Auth(blacklistMgr), authHandler.GetCurrentUser)
+			auth.PUT("/password/change", middleware.Auth(blacklistMgr), middleware.PasswordChangeRateLimit(redis.Client), authHandler.ChangePassword)
 		}
 
 		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.RequestReset)
@@ -239,7 +248,7 @@ func main() {
 		oauth := v1.Group("/oauth")
 		{
 			oauth.POST("/authorize", middleware.Auth(blacklistMgr), oauthHandler.Authorize)
-			oauth.POST("/token", middleware.CSRF(redis.Client), middleware.OAuthTokenRateLimit(redis.Client), oauthHandler.Token)
+			oauth.POST("/token", middleware.OAuthTokenRateLimit(redis.Client), oauthHandler.Token)
 			oauth.GET("/userinfo", middleware.OAuthAuth(blacklistMgr), oauthHandler.Userinfo)
 		}
 
