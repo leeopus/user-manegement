@@ -45,6 +45,11 @@ func (r *AsyncAuditLogRepository) Create(log *repository.AuditLog) error {
 	}
 }
 
+// GetInner 返回内部的同步 repository，用于安全关键审计日志的同步写入
+func (r *AsyncAuditLogRepository) GetInner() repository.AuditLogRepository {
+	return r.inner
+}
+
 func (r *AsyncAuditLogRepository) FindByUserID(userID uint, offset, limit int) ([]repository.AuditLog, int64, error) {
 	return r.inner.FindByUserID(userID, offset, limit)
 }

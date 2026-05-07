@@ -101,39 +101,27 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 		return nil, apperrors.ErrDisposableEmail
 	}
 
-	emailExists := false
-	if _, err := s.userRepo.FindByEmail(email); err == nil {
-		emailExists = true
-	}
-
-	// 无论邮箱是否存在，都执行一次 bcrypt 保持恒定时间，防止时序侧信道枚举
-	if emailExists {
-		_, _ = utils.HashPassword("constant-time-dummy-value")
-		// 时序均衡：模拟注册路径的 DB 事务延迟，缩小两条路径的响应时间差异
-		_ = s.userRepo.Transaction(func(tx *gorm.DB) error {
-			return nil
-		})
-		// 不返回"邮箱已存在"错误，防止邮箱枚举攻击
-		return nil, apperrors.ErrRegisterSilent.WithDetails(map[string]interface{}{
-			"hint": "if_this_email_is_available_you_will_receive_confirmation",
-		})
-	}
-
 	username := utils.GenerateUsernameFromEmail(email)
 
+	// 两条路径统一执行 bcrypt，消除时序差异
 	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
 		zap.L().Error("Failed to hash password", zap.Error(err))
 		return nil, apperrors.ErrInternalServer
 	}
 
+	// 两条路径统一执行事务内 INSERT：
+	// - 邮箱不存在：INSERT 成功，用户创建
+	// - 邮箱已存在：INSERT 触发唯一约束冲突，事务回滚
+	// 两条路径执行的操作集完全相同，消除时序侧信道
+	silent := false
 	var user *repository.User
 	createErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
 		currentUsername := username
 
 		now := time.Now()
 		for attempt := 0; attempt < maxRegisterAttempts; attempt++ {
-			user = &repository.User{
+			candidate := &repository.User{
 				Username:          currentUsername,
 				Email:             email,
 				PasswordHash:      passwordHash,
@@ -141,7 +129,7 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 				PasswordChangedAt: &now,
 			}
 
-			if err := tx.Create(user).Error; err != nil {
+			if err := tx.Create(candidate).Error; err != nil {
 				if isUniqueViolation(err) {
 					if isUsernameConstraint(err) {
 						suffix, sErr := utils.RandomSuffix(6)
@@ -151,10 +139,13 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 						currentUsername = username + suffix
 						continue
 					}
-					return apperrors.ErrEmailAlreadyExists
+					// email 唯一约束冲突 → 邮箱已存在，静默返回成功
+					silent = true
+					return nil
 				}
 				return apperrors.ErrInternalServer
 			}
+			user = candidate
 			return nil
 		}
 
@@ -165,8 +156,15 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 		if appErr, ok := apperrors.IsAppError(createErr); ok {
 			return nil, appErr
 		}
-		zap.L().Error("Failed to create user", zap.String("email", email), zap.Error(createErr))
+		zap.L().Error("Failed to create user", zap.Error(createErr))
 		return nil, apperrors.ErrInternalServer
+	}
+
+	if silent {
+		// 邮箱已存在，返回静默成功防止枚举
+		return nil, apperrors.ErrRegisterSilent.WithDetails(map[string]interface{}{
+			"hint": "if_this_email_is_available_you_will_receive_confirmation",
+		})
 	}
 
 	s.auditLogger.Log(&dto.AuditContext{
@@ -232,6 +230,11 @@ func (s *authService) Login(email, password, clientIP, userAgent string, remembe
 
 	s.lockoutManager.ClearFailedAttempts(email, clientIP)
 
+	// 清除可能遗留的用户级吊销标记（如管理员先禁用再激活用户后未清除）
+	if err := s.blacklistMgr.ClearUserRevoked(user.ID); err != nil {
+		zap.L().Warn("Failed to clear user revocation on login", zap.Uint("user_id", user.ID), zap.Error(err))
+	}
+
 	// 缓存用户 active 状态，供 auth 中间件校验
 	if err := s.blacklistMgr.SetUserStatus(user.ID, "active"); err != nil {
 		zap.L().Warn("Failed to cache user status on login", zap.Uint("user_id", user.ID), zap.Error(err))
@@ -258,13 +261,13 @@ func (s *authService) Login(email, password, clientIP, userAgent string, remembe
 
 	userWithRoles, err := s.userRepo.FindByIDWithRoles(user.ID)
 	if err != nil {
-		s.auditLogger.Log(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP, UserAgent: userAgent}, "login", "user", map[string]interface{}{
+		_ = s.auditLogger.LogSync(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP, UserAgent: userAgent}, "login", "user", map[string]interface{}{
 			"method": "password",
 		})
 		return user, accessToken, refreshToken, nil
 	}
 
-	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP, UserAgent: userAgent}, "login", "user", map[string]interface{}{
+	_ = s.auditLogger.LogSync(&dto.AuditContext{UserID: user.ID, IPAddress: clientIP, UserAgent: userAgent}, "login", "user", map[string]interface{}{
 		"method": "password",
 	})
 
@@ -376,6 +379,11 @@ func (s *authService) Logout(userID uint, refreshToken, accessToken string) erro
 func (s *authService) LogoutAll(userID uint) error {
 	if err := s.refreshTokenMgr.RevokeAll(userID); err != nil {
 		zap.L().Warn("Failed to revoke all refresh tokens",
+			zap.Uint("user_id", userID), zap.Error(err))
+	}
+
+	if err := s.blacklistMgr.RevokeAllUserTokens(userID); err != nil {
+		zap.L().Warn("Failed to blacklist all user tokens",
 			zap.Uint("user_id", userID), zap.Error(err))
 	}
 
@@ -500,7 +508,7 @@ func (s *authService) ChangePassword(userID uint, currentPassword, newPassword s
 		revokeErr = err
 	}
 
-	s.auditLogger.Log(&auditCtx, "change_password", "user", nil)
+	s.auditLogger.LogSync(&auditCtx, "change_password", "user", nil)
 
 	if revokeErr != nil {
 		return apperrors.ErrPasswordChangeRevokeFailed

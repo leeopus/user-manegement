@@ -67,6 +67,13 @@ var slidingWindowScript = redis.NewScript(`
 
 // RateLimit 通用限流中间件（滑动窗口算法）
 func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
+	return rl.RateLimitWithKey(config, func(c *gin.Context) string {
+		return c.ClientIP()
+	})
+}
+
+// RateLimitWithKey 支持自定义限流 key 的限流中间件（用于用户维度等场景）
+func (rl *RateLimiter) RateLimitWithKey(config RateLimitConfig, keyFn func(c *gin.Context) string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rl.redis == nil {
 			if rl.failClosed {
@@ -97,11 +104,16 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 			return
 		}
 
+		limitKey := keyFn(c)
+		if limitKey == "" {
+			c.Next()
+			return
+		}
+
 		ctx := c.Request.Context()
-		clientIP := c.ClientIP()
 
 		// 检查是否被封禁
-		blockedKey := fmt.Sprintf("rate_limit:blocked:%s", clientIP)
+		blockedKey := fmt.Sprintf("rate_limit:blocked:%s:%s", c.FullPath(), limitKey)
 		blocked, _ := rl.redis.Get(ctx, blockedKey).Result()
 		if blocked != "" {
 			c.JSON(429, gin.H{
@@ -110,7 +122,7 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 					"code":    "RATE_LIMIT_BLOCKED_429",
 					"message": "RATE_LIMIT_BLOCKED",
 					"details": gin.H{
-						"reason":        "IP is blocked due to too many requests",
+						"reason":        "too many requests",
 						"block_duration": int(config.BlockDuration.Minutes()),
 					},
 				},
@@ -120,7 +132,7 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 		}
 
 		// 滑动窗口限流
-		key := fmt.Sprintf("rate_limit:%s:%s", c.FullPath(), clientIP)
+		key := fmt.Sprintf("rate_limit:%s:%s", c.FullPath(), limitKey)
 		now := time.Now().UnixMilli()
 		member := fmt.Sprintf("%d:%s", now, c.GetString("request_id"))
 		windowMS := config.Window.Milliseconds()
@@ -253,14 +265,34 @@ func CSRFTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
-// PasswordChangeRateLimit 密码修改端点专用限流（防止 session 劫持后暴力猜密码，fail-closed）
+// PasswordChangeRateLimit 密码修改端点专用限流（IP + 用户双维度，fail-closed）
+// 先检查 IP 维度限流，再检查用户维度限流，任一维度超限即拒绝
 func PasswordChangeRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	rl := NewFailClosedRateLimiter(redisClient)
-	return rl.RateLimit(RateLimitConfig{
+	ipLimit := rl.RateLimit(RateLimitConfig{
 		MaxRequests:   5,
 		Window:        15 * time.Minute,
 		BlockDuration: 1 * time.Hour,
 	})
+	userLimit := rl.RateLimitWithKey(RateLimitConfig{
+		MaxRequests:   3,
+		Window:        15 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	}, func(c *gin.Context) string {
+		userID, exists := c.Get("user_id")
+		if !exists {
+			return ""
+		}
+		return fmt.Sprintf("user:%v", userID)
+	})
+
+	return func(c *gin.Context) {
+		ipLimit(c)
+		if c.IsAborted() {
+			return
+		}
+		userLimit(c)
+	}
 }
 
 // GetRemainingAttempts 获取剩余尝试次数

@@ -146,6 +146,11 @@ func main() {
 		BlacklistMgr: blacklistMgr,
 	}
 
+	authCfg := middleware.AuthConfig{
+		BlacklistMgr: blacklistMgr,
+		UserRepo:     userRepo,
+	}
+
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	roleHandler := handler.NewRoleHandler(roleService)
@@ -192,17 +197,17 @@ func main() {
 	v1 := r.Group("/api/v1")
 	v1.Use(middleware.APIRateLimit(redis.Client))
 	{
-		v1.GET("/health/detail", middleware.Auth(blacklistMgr), healthCheckDetail(sqlDB))
+		v1.GET("/health/detail", middleware.Auth(authCfg), healthCheckDetail(sqlDB))
 
 		auth := v1.Group("/auth")
 		auth.Use(middleware.CSRF(redis.Client))
 		{
 			auth.POST("/register", middleware.RegisterRateLimit(redis.Client), authHandler.Register)
 			auth.POST("/login", middleware.LoginRateLimit(redis.Client), authHandler.Login)
-			auth.POST("/logout", middleware.Auth(blacklistMgr), authHandler.Logout)
+			auth.POST("/logout", middleware.Auth(authCfg), authHandler.Logout)
 			auth.POST("/refresh", middleware.CSRF(redis.Client), middleware.RefreshRateLimit(redis.Client), authHandler.RefreshToken)
-			auth.GET("/me", middleware.Auth(blacklistMgr), authHandler.GetCurrentUser)
-			auth.PUT("/password/change", middleware.Auth(blacklistMgr), middleware.PasswordChangeRateLimit(redis.Client), authHandler.ChangePassword)
+			auth.GET("/me", middleware.Auth(authCfg), authHandler.GetCurrentUser)
+			auth.PUT("/password/change", middleware.Auth(authCfg), middleware.PasswordChangeRateLimit(redis.Client), authHandler.ChangePassword)
 		}
 
 		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.RequestReset)
@@ -210,7 +215,7 @@ func main() {
 		v1.POST("/auth/password/validate-token", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.ValidateToken)
 
 		users := v1.Group("/users")
-		users.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermUserRead))
+		users.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermUserRead))
 		{
 			users.GET("", userHandler.ListUsers)
 			users.GET("/:id", userHandler.GetUser)
@@ -224,7 +229,7 @@ func main() {
 		}
 
 		roles := v1.Group("/roles")
-		roles.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermRoleManage))
+		roles.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermRoleManage))
 		{
 			roles.GET("", roleHandler.ListRoles)
 			roles.GET("/:id", roleHandler.GetRole)
@@ -236,7 +241,7 @@ func main() {
 		}
 
 		permissions := v1.Group("/permissions")
-		permissions.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermPermissionManage))
+		permissions.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermPermissionManage))
 		{
 			permissions.GET("", permissionHandler.ListPermissions)
 			permissions.GET("/:id", permissionHandler.GetPermission)
@@ -247,13 +252,13 @@ func main() {
 
 		oauth := v1.Group("/oauth")
 		{
-			oauth.POST("/authorize", middleware.Auth(blacklistMgr), oauthHandler.Authorize)
+			oauth.POST("/authorize", middleware.Auth(authCfg), middleware.CSRF(redis.Client), oauthHandler.Authorize)
 			oauth.POST("/token", middleware.OAuthTokenRateLimit(redis.Client), oauthHandler.Token)
-			oauth.GET("/userinfo", middleware.OAuthAuth(blacklistMgr), oauthHandler.Userinfo)
+			oauth.GET("/userinfo", middleware.OAuthAuth(authCfg), oauthHandler.Userinfo)
 		}
 
 		oauthApps := v1.Group("/oauth/applications")
-		oauthApps.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermOAuthManage))
+		oauthApps.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermOAuthManage))
 		{
 			oauthApps.GET("", oauthHandler.ListApplications)
 			oauthApps.GET("/:id", oauthHandler.GetApplication)
@@ -263,7 +268,7 @@ func main() {
 		}
 
 		auditLogs := v1.Group("/audit-logs")
-		auditLogs.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermAuditRead))
+		auditLogs.Use(middleware.Auth(authCfg), middleware.RequirePermission(rbacCfg, service.PermAuditRead))
 		{
 			auditLogs.GET("", auditHandler.ListAuditLogs)
 		}

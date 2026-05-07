@@ -160,6 +160,10 @@ func (s *passwordResetService) ValidateResetToken(token string) (bool, error) {
 func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 	tokenHash := repository.HashResetToken(token)
 
+	// 在事务内捕获 user ID 和 email，供事务后副作用使用
+	var targetUserID uint
+	var targetEmail string
+
 	txErr := s.tokenRepo.Transaction(func(tx *gorm.DB) error {
 		resetToken, err := s.tokenRepo.FindByTokenHashForUpdate(tx, tokenHash)
 		if err != nil {
@@ -243,6 +247,10 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 			zap.L().Error("Failed to save password history", zap.Error(err))
 		}
 
+		// 捕供事务后副作用使用
+		targetUserID = user.ID
+		targetEmail = user.Email
+
 		return nil
 	})
 
@@ -253,19 +261,14 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 		return apperrors.ErrInternalServer
 	}
 
-	resetToken, _ := s.tokenRepo.FindByTokenHash(tokenHash)
-	if resetToken != nil {
-		user, _ := s.userRepo.FindByID(resetToken.UserID)
-		if user != nil {
-			_ = s.refreshTokenMgr.RevokeAll(user.ID)
-			_ = s.blacklistMgr.RevokeAllUserTokens(user.ID)
-			_ = s.emailService.SendPasswordChangedNotification(user.Email)
-			_ = s.passwordHistoryRepo.CleanupOld(user.ID, 5)
-			s.auditLogger.Log(&dto.AuditContext{UserID: user.ID}, "password_reset_completed", "user", map[string]interface{}{
-				"email": user.Email,
-			})
-		}
-	}
+	// 事务成功后执行副作用，直接使用事务内捕获的数据，避免二次查询
+	_ = s.refreshTokenMgr.RevokeAll(targetUserID)
+	_ = s.blacklistMgr.RevokeAllUserTokens(targetUserID)
+	_ = s.emailService.SendPasswordChangedNotification(targetEmail)
+	_ = s.passwordHistoryRepo.CleanupOld(targetUserID, 5)
+	s.auditLogger.LogSync(&dto.AuditContext{UserID: targetUserID}, "password_reset_completed", "user", map[string]interface{}{
+		"email": targetEmail,
+	})
 
 	return nil
 }

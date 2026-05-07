@@ -101,6 +101,18 @@ func (m *TokenBlacklistManager) CheckTokenStatus(ctx context.Context, userID uin
 	return userRevoked, tokenBlacklisted, nil
 }
 
+// ClearUserRevoked 清除用户级吊销标记（用户重新激活时调用）
+func (m *TokenBlacklistManager) ClearUserRevoked(userID uint) error {
+	if m.redis == nil || userID == 0 {
+		return nil
+	}
+	ctx, cancel := m.ctx()
+	defer cancel()
+
+	key := fmt.Sprintf("%s%d", userRevokedPrefix, userID)
+	return m.redis.Del(ctx, key).Err()
+}
+
 // RevokeAllUserTokens 吊销用户所有已发出的 access token（通过用户级吊销标记）
 func (m *TokenBlacklistManager) RevokeAllUserTokens(userID uint) error {
 	if m.redis == nil || userID == 0 {

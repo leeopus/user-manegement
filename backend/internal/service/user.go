@@ -214,11 +214,20 @@ func (s *userService) UpdateUserStatus(id, currentUserID uint, status string, au
 		if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
 			zap.L().Error("CRITICAL: failed to blacklist user tokens on user disable, sessions may remain active", zap.Uint("user_id", id), zap.Error(err))
 		}
+	} else if status == StatusActive {
+		// 清除禁用时遗留的用户级吊销标记，否则新签发的 token 也会被拒绝
+		if err := s.blacklistMgr.ClearUserRevoked(id); err != nil {
+			zap.L().Error("CRITICAL: failed to clear user revocation on activation, user may be unable to authenticate",
+				zap.Uint("user_id", id), zap.Error(err))
+		}
 	}
 
-	_ = s.rbacCache.InvalidateUserRoles(id)
+	if err := s.rbacCache.InvalidateUserRoles(id); err != nil {
+		zap.L().Error("CRITICAL: failed to invalidate RBAC cache after status change, permission checks may use stale data",
+			zap.Uint("user_id", id), zap.String("new_status", status), zap.Error(err))
+	}
 
-	s.auditLogger.Log(&dto.AuditContext{
+	_ = s.auditLogger.LogSync(&dto.AuditContext{
 		UserID:    auditCtx.UserID,
 		IPAddress: auditCtx.IPAddress,
 		UserAgent: auditCtx.UserAgent,
@@ -272,7 +281,7 @@ func (s *userService) DeleteUser(id uint, currentUserID uint, auditCtx dto.Audit
 	}
 	_ = s.rbacCache.InvalidateUserRoles(id)
 
-	s.auditLogger.Log(&dto.AuditContext{
+	_ = s.auditLogger.LogSync(&dto.AuditContext{
 		UserID:    auditCtx.UserID,
 		IPAddress: auditCtx.IPAddress,
 		UserAgent: auditCtx.UserAgent,
@@ -289,7 +298,7 @@ func (s *userService) HardDeleteUser(id uint, currentUserID uint, auditCtx dto.A
 	}
 
 	// 使用 Unscoped 查询，确保能找到已软删除的用户
-	user, err := s.userRepo.FindByIDUnscoped(id)
+	_, err := s.userRepo.FindByIDUnscoped(id)
 	if err != nil {
 		return apperrors.ErrUserNotFound
 	}
@@ -311,14 +320,12 @@ func (s *userService) HardDeleteUser(id uint, currentUserID uint, auditCtx dto.A
 	}
 	_ = s.rbacCache.InvalidateUserRoles(id)
 
-	s.auditLogger.Log(&dto.AuditContext{
+	_ = s.auditLogger.LogSync(&dto.AuditContext{
 		UserID:    auditCtx.UserID,
 		IPAddress: auditCtx.IPAddress,
 		UserAgent: auditCtx.UserAgent,
 	}, "hard_delete_user", "user", map[string]interface{}{
-		"target_id":       id,
-		"target_username": user.Username,
-		"target_email":    user.Email,
+		"target_id": id,
 	})
 
 	return nil
@@ -336,7 +343,7 @@ func (s *userService) AssignRole(userID, roleID uint, auditCtx dto.AuditContext)
 		if _, err := s.roleRepo.FindByIDWithTx(tx, roleID); err != nil {
 			return apperrors.ErrRoleNotFound
 		}
-		return s.roleRepo.AssignRoleToUser(userID, roleID)
+		return s.roleRepo.AssignRoleToUserWithTx(tx, userID, roleID)
 	}); err != nil {
 		if appErr, ok := apperrors.IsAppError(err); ok {
 			return appErr
@@ -345,10 +352,12 @@ func (s *userService) AssignRole(userID, roleID uint, auditCtx dto.AuditContext)
 	}
 
 	if err := s.rbacCache.InvalidateUserRoles(userID); err != nil {
-		zap.L().Warn("Failed to invalidate RBAC cache after role assignment", zap.Error(err))
+		zap.L().Error("CRITICAL: failed to invalidate RBAC cache after role assignment, permission changes may be delayed",
+			zap.Uint("user_id", userID), zap.Error(err))
+		return apperrors.ErrInternalServer
 	}
 
-	s.auditLogger.Log(&dto.AuditContext{
+	s.auditLogger.LogSync(&dto.AuditContext{
 		UserID:    auditCtx.UserID,
 		IPAddress: auditCtx.IPAddress,
 		UserAgent: auditCtx.UserAgent,
@@ -365,7 +374,7 @@ func (s *userService) RemoveRole(userID, roleID uint, auditCtx dto.AuditContext)
 		if _, err := s.userRepo.FindByIDWithTx(tx, userID); err != nil {
 			return apperrors.ErrUserNotFound
 		}
-		return s.roleRepo.RemoveRoleFromUser(userID, roleID)
+		return s.roleRepo.RemoveRoleFromUserWithTx(tx, userID, roleID)
 	}); err != nil {
 		if appErr, ok := apperrors.IsAppError(err); ok {
 			return appErr
@@ -374,10 +383,12 @@ func (s *userService) RemoveRole(userID, roleID uint, auditCtx dto.AuditContext)
 	}
 
 	if err := s.rbacCache.InvalidateUserRoles(userID); err != nil {
-		zap.L().Warn("Failed to invalidate RBAC cache after role removal", zap.Error(err))
+		zap.L().Error("CRITICAL: failed to invalidate RBAC cache after role removal, permission changes may be delayed",
+			zap.Uint("user_id", userID), zap.Error(err))
+		return apperrors.ErrInternalServer
 	}
 
-	s.auditLogger.Log(&dto.AuditContext{
+	s.auditLogger.LogSync(&dto.AuditContext{
 		UserID:    auditCtx.UserID,
 		IPAddress: auditCtx.IPAddress,
 		UserAgent: auditCtx.UserAgent,

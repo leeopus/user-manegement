@@ -177,7 +177,7 @@ func (s *roleService) AssignRolePermission(roleID, permissionID uint, auditCtx d
 
 	s.invalidateCacheForRole(roleID)
 
-	s.auditLogger.Log(&auditCtx, "assign_permission", "role", map[string]interface{}{
+	s.auditLogger.LogSync(&auditCtx, "assign_permission", "role", map[string]interface{}{
 		"role_id":       roleID,
 		"permission_id": permissionID,
 	})
@@ -199,7 +199,7 @@ func (s *roleService) RemoveRolePermission(roleID, permissionID uint, auditCtx d
 
 	s.invalidateCacheForRole(roleID)
 
-	s.auditLogger.Log(&auditCtx, "remove_permission", "role", map[string]interface{}{
+	s.auditLogger.LogSync(&auditCtx, "remove_permission", "role", map[string]interface{}{
 		"role_id":       roleID,
 		"permission_id": permissionID,
 	})

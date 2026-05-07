@@ -28,7 +28,9 @@ type RoleRepository interface {
 	RemovePermission(roleID, permissionID uint) error
 	GetUserIDsByRoleID(roleID uint) ([]uint, error)
 	AssignRoleToUser(userID, roleID uint) error
+	AssignRoleToUserWithTx(tx *gorm.DB, userID, roleID uint) error
 	RemoveRoleFromUser(userID, roleID uint) error
+	RemoveRoleFromUserWithTx(tx *gorm.DB, userID, roleID uint) error
 }
 
 type roleRepository struct {
@@ -121,7 +123,15 @@ func (r *roleRepository) GetUserIDsByRoleID(roleID uint) ([]uint, error) {
 }
 
 func (r *roleRepository) AssignRoleToUser(userID, roleID uint) error {
-	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&UserRole{
+	return r.assignRoleToUser(r.db, userID, roleID)
+}
+
+func (r *roleRepository) AssignRoleToUserWithTx(tx *gorm.DB, userID, roleID uint) error {
+	return r.assignRoleToUser(tx, userID, roleID)
+}
+
+func (r *roleRepository) assignRoleToUser(db *gorm.DB, userID, roleID uint) error {
+	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&UserRole{
 		UserID:    userID,
 		RoleID:    roleID,
 		CreatedAt: time.Now(),
@@ -129,5 +139,13 @@ func (r *roleRepository) AssignRoleToUser(userID, roleID uint) error {
 }
 
 func (r *roleRepository) RemoveRoleFromUser(userID, roleID uint) error {
-	return r.db.Where("user_id = ? AND role_id = ?", userID, roleID).Delete(&UserRole{}).Error
+	return r.removeRoleFromUser(r.db, userID, roleID)
+}
+
+func (r *roleRepository) RemoveRoleFromUserWithTx(tx *gorm.DB, userID, roleID uint) error {
+	return r.removeRoleFromUser(tx, userID, roleID)
+}
+
+func (r *roleRepository) removeRoleFromUser(db *gorm.DB, userID, roleID uint) error {
+	return db.Where("user_id = ? AND role_id = ?", userID, roleID).Delete(&UserRole{}).Error
 }

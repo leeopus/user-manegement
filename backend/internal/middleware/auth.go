@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user-system/backend/internal/repository"
 	"github.com/user-system/backend/pkg/auth"
 	"github.com/user-system/backend/pkg/response"
 	"github.com/user-system/backend/pkg/utils"
@@ -50,7 +51,7 @@ func getTokenCookie(c *gin.Context, name string) (string, error) {
 }
 
 // authenticate 通用认证逻辑（Auth 和 OAuthAuth 共用）
-func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, source tokenSource, restriction tokenRestriction) {
+func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, userRepo repository.UserRepository, source tokenSource, restriction tokenRestriction) {
 	var tokenString string
 
 	authHeader := c.GetHeader("Authorization")
@@ -107,8 +108,7 @@ func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, sour
 		return
 	}
 
-	// 检查用户状态：Redis 缓存命中时直接判断，miss 时放行（依赖 token 本身的有效性）
-	// 若用户已被禁用，其 refresh token 已被 RevokeAll，无法刷新，access token 自然过期
+	// 检查用户状态：Redis 缓存命中时直接判断，缓存 miss 时回源 DB 确认
 	active, cached, statusErr := blacklistMgr.CheckUserStatus(claims.UserID)
 	if statusErr != nil {
 		zap.L().Warn("User status check failed, rejecting request for security", zap.Error(statusErr))
@@ -121,6 +121,25 @@ func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, sour
 		c.Abort()
 		return
 	}
+	// 缓存 miss：回源 DB 检查用户是否仍为 active 状态
+	if !cached && userRepo != nil {
+		user, dbErr := userRepo.FindByID(claims.UserID)
+		if dbErr != nil {
+			// 用户不存在，拒绝访问
+			response.Unauthorized(c)
+			c.Abort()
+			return
+		}
+		if user.Status != "active" {
+			// 用户已被禁用/删除，写入缓存以加速后续判断，并拒绝本次访问
+			_ = blacklistMgr.SetUserStatus(user.ID, user.Status)
+			response.Forbidden(c)
+			c.Abort()
+			return
+		}
+		// 用户状态正常，回填缓存
+		_ = blacklistMgr.SetUserStatus(user.ID, "active")
+	}
 
 	c.Set("user_id", claims.UserID)
 	c.Set("username", claims.Username)
@@ -129,16 +148,22 @@ func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, sour
 	c.Next()
 }
 
+// AuthConfig 认证中间件配置
+type AuthConfig struct {
+	BlacklistMgr *auth.TokenBlacklistManager
+	UserRepo     repository.UserRepository
+}
+
 // Auth 创建认证中间件（支持 Bearer header + cookie fallback，拒绝 OAuth token）
-func Auth(blacklistMgr *auth.TokenBlacklistManager) gin.HandlerFunc {
+func Auth(cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authenticate(c, blacklistMgr, tokenSourceAll, restrictionNoOAuth)
+		authenticate(c, cfg.BlacklistMgr, cfg.UserRepo, tokenSourceAll, restrictionNoOAuth)
 	}
 }
 
 // OAuthAuth 创建 OAuth 认证中间件（仅 Bearer header，仅允许 OAuth token）
-func OAuthAuth(blacklistMgr *auth.TokenBlacklistManager) gin.HandlerFunc {
+func OAuthAuth(cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authenticate(c, blacklistMgr, tokenSourceHeaderOnly, restrictionOAuthOnly)
+		authenticate(c, cfg.BlacklistMgr, cfg.UserRepo, tokenSourceHeaderOnly, restrictionOAuthOnly)
 	}
 }
