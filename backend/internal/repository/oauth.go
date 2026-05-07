@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"time"
 
+	"github.com/user-system/backend/internal/config"
 	"gorm.io/gorm"
 )
 
@@ -24,15 +26,20 @@ type OAuthToken struct {
 	UserID        uint   `gorm:"not null;index:idx_oauth_token_user"`
 	AccessToken   string `gorm:"size:64;uniqueIndex;not null"`
 	RefreshToken  string `gorm:"size:64;uniqueIndex"`
-	ExpiresAt     time.Time
+	ExpiresAt     time.Time `gorm:"index:idx_oauth_token_expires"`
 	Application   OAuthApplication `gorm:"foreignKey:ApplicationID"`
 	User          User             `gorm:"foreignKey:UserID"`
 }
 
-// HashOAuthToken 计算 OAuth token 的 SHA-256 哈希，用于数据库存储和查询
+// HashOAuthToken 计算 OAuth token 的 HMAC-SHA256 哈希，用于数据库存储和查询
 func HashOAuthToken(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(h[:])
+	cfg := config.Get()
+	if cfg == nil || cfg.JWT.Secret == "" {
+		panic("oauth: JWT secret not configured, refusing to hash token with insecure fallback")
+	}
+	mac := hmac.New(sha256.New, []byte(cfg.JWT.Secret))
+	mac.Write([]byte(token))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 type OAuthApplicationRepository interface {

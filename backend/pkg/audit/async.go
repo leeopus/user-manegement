@@ -1,7 +1,7 @@
 package audit
 
 import (
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/user-system/backend/internal/repository"
@@ -13,11 +13,11 @@ const bufferSize = 2048
 // AsyncAuditLogRepository 异步审计日志 repository 包装器
 // Create 方法异步写入，Shutdown 时排空队列
 type AsyncAuditLogRepository struct {
-	inner   repository.AuditLogRepository
-	queue   chan *repository.AuditLog
-	done    chan struct{}
-	mu      sync.Mutex
-	stopped bool
+	inner      repository.AuditLogRepository
+	queue      chan *repository.AuditLog
+	done       chan struct{}
+	stopped    atomic.Bool
+	droppedCnt atomic.Int64
 }
 
 // NewAsyncAuditLogRepository 创建异步审计日志 repository
@@ -32,18 +32,15 @@ func NewAsyncAuditLogRepository(inner repository.AuditLogRepository) *AsyncAudit
 }
 
 func (r *AsyncAuditLogRepository) Create(log *repository.AuditLog) error {
-	r.mu.Lock()
-	if r.stopped {
-		r.mu.Unlock()
+	if r.stopped.Load() {
 		return r.inner.Create(log)
 	}
 	select {
 	case r.queue <- log:
-		r.mu.Unlock()
 		return nil
 	default:
-		r.mu.Unlock()
-		zap.L().Warn("Audit log queue full, falling back to sync write")
+		// 队列满时回退到同步写入，安全事件不可丢弃
+		zap.L().Warn("Audit log queue full, falling back to synchronous write")
 		return r.inner.Create(log)
 	}
 }
@@ -60,12 +57,20 @@ func (r *AsyncAuditLogRepository) ListFiltered(offset, limit int, filters reposi
 	return r.inner.ListFiltered(offset, limit, filters)
 }
 
+func (r *AsyncAuditLogRepository) CleanupOlderThan(retentionDays int) (int64, error) {
+	return r.inner.CleanupOlderThan(retentionDays)
+}
+
 // Shutdown 优雅关闭：停止接受新日志，排空队列中已有日志，或超时退出
 func (r *AsyncAuditLogRepository) Shutdown(timeout time.Duration) {
-	r.mu.Lock()
-	r.stopped = true
+	r.stopped.Store(true)
 	close(r.queue)
-	r.mu.Unlock()
+
+	if dropped := r.droppedCnt.Load(); dropped > 0 {
+		zap.L().Warn("Audit logs were dropped during this session",
+			zap.Int64("total_dropped", dropped),
+		)
+	}
 
 	select {
 	case <-r.done:

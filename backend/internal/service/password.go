@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	apperrors "github.com/user-system/backend/pkg/errors"
 	"github.com/user-system/backend/pkg/utils"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -72,11 +74,8 @@ func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
 	user, err := s.userRepo.FindByEmail(emailAddr)
 
 	if err != nil {
-		// 邮箱不存在：执行与正常流程等量的工作
-		// token 生成 + hash + DB 读取 + 邮件发送的时间成本
 		dummyToken, _ := generateSecureToken()
 		_ = repository.HashResetToken(dummyToken)
-		// 模拟 DB 读取延迟
 		s.tokenRepo.TouchDummy()
 		return nil
 	}
@@ -153,7 +152,7 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 			return apperrors.ErrInternalServer
 		}
 
-		user, err := s.userRepo.FindByEmail(resetToken.Email)
+		user, err := s.userRepo.FindByIDWithTx(tx, resetToken.UserID)
 		if err != nil {
 			return apperrors.ErrUserNotFound
 		}
@@ -170,13 +169,31 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 			})
 		}
 
-		// 检查密码历史（最近5次）
-		histories, _ := s.passwordHistoryRepo.FindByUserID(user.ID, 5)
-		for _, h := range histories {
-			if utils.CheckPassword(newPassword, h.PasswordHash) {
-				return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
-					"reason": "new password was used recently, please choose a different one",
+		histories, histErr := s.passwordHistoryRepo.FindByUserID(user.ID, 5)
+		if histErr != nil {
+			zap.L().Error("Failed to check password history, aborting reset for security",
+				zap.Uint("user_id", user.ID), zap.Error(histErr))
+			return apperrors.ErrInternalServer
+		}
+		if len(histories) > 0 {
+			g, _ := errgroup.WithContext(context.Background())
+			reused := make([]bool, len(histories))
+			for i, h := range histories {
+				i, h := i, h
+				g.Go(func() error {
+					if utils.CheckPassword(newPassword, h.PasswordHash) {
+						reused[i] = true
+					}
+					return nil
 				})
+			}
+			_ = g.Wait()
+			for _, r := range reused {
+				if r {
+					return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+						"reason": "new password was used recently, please choose a different one",
+					})
+				}
 			}
 		}
 
@@ -187,11 +204,12 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 		}
 
 		user.PasswordHash = hashedPassword
+		now := time.Now()
+		user.PasswordChangedAt = &now
 		if err := tx.Save(user).Error; err != nil {
 			return apperrors.ErrInternalServer
 		}
 
-		// 记录密码历史
 		if err := s.passwordHistoryRepo.CreateWithTx(tx, &repository.PasswordHistory{
 			UserID:       user.ID,
 			PasswordHash: hashedPassword,
@@ -209,10 +227,9 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 		return apperrors.ErrInternalServer
 	}
 
-	// 事务成功后执行副作用操作
 	resetToken, _ := s.tokenRepo.FindByTokenHash(tokenHash)
 	if resetToken != nil {
-		user, _ := s.userRepo.FindByEmail(resetToken.Email)
+		user, _ := s.userRepo.FindByID(resetToken.UserID)
 		if user != nil {
 			_ = s.refreshTokenMgr.RevokeAll(user.ID)
 			_ = s.blacklistMgr.RevokeAllUserTokens(user.ID)

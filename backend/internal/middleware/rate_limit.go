@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // RateLimitConfig 限流配置
@@ -62,17 +63,12 @@ var slidingWindowScript = redis.NewScript(`
 func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rl.redis == nil {
-			c.JSON(503, gin.H{
-				"success": false,
-				"error": gin.H{
-					"code":    "RATE_LIMIT_UNAVAILABLE_503",
-					"message": "RATE_LIMIT_UNAVAILABLE",
-					"details": gin.H{
-						"reason": "rate limiter is unavailable, request rejected for security",
-					},
-				},
-			})
-			c.Abort()
+			// Redis 不可用时记录警告但放行请求，避免自我 DoS
+			zap.L().Warn("Rate limiter unavailable (Redis not connected), skipping rate limit",
+				zap.String("path", c.FullPath()),
+				zap.String("client_ip", c.ClientIP()),
+			)
+			c.Next()
 			return
 		}
 
@@ -112,7 +108,18 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 		).Int64Slice()
 
 		if err != nil {
-			c.Next()
+			zap.L().Error("Rate limit script error, rejecting request for security", zap.Error(err))
+			c.JSON(503, gin.H{
+				"success": false,
+				"error": gin.H{
+					"code":    "RATE_LIMIT_ERROR_503",
+					"message": "RATE_LIMIT_ERROR",
+					"details": gin.H{
+						"reason": "rate limiter encountered an error, request rejected for security",
+					},
+				},
+			})
+			c.Abort()
 			return
 		}
 
@@ -140,7 +147,11 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 		}
 
 		c.Header("X-RateLimit-Limit", strconv.Itoa(config.MaxRequests))
-		c.Header("X-RateLimit-Remaining", strconv.Itoa(config.MaxRequests-int(count)))
+		remaining := config.MaxRequests - int(count)
+		if remaining < 0 {
+			remaining = 0
+		}
+		c.Header("X-RateLimit-Remaining", strconv.Itoa(remaining))
 		c.Header("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(config.Window).Unix(), 10))
 
 		c.Next()

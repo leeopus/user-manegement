@@ -38,7 +38,7 @@ func SeedDefaults(
 ) {
 	seedPermissions(db, permissionRepo)
 	seedRoles(db, roleRepo, permissionRepo)
-	seedAdminUser(userRepo, roleRepo)
+	seedAdminUser(db, userRepo, roleRepo)
 }
 
 func seedPermissions(db *gorm.DB, permissionRepo repository.PermissionRepository) {
@@ -96,12 +96,21 @@ func seedRole(db *gorm.DB, code, name, description string) *repository.Role {
 	return role
 }
 
-func seedAdminUser(userRepo repository.UserRepository, roleRepo repository.RoleRepository) {
+func seedAdminUser(db *gorm.DB, userRepo repository.UserRepository, roleRepo repository.RoleRepository) {
 	adminEmail := os.Getenv("INITIAL_ADMIN_EMAIL")
 	adminPassword := os.Getenv("INITIAL_ADMIN_PASSWORD")
 
 	if adminEmail == "" || adminPassword == "" {
 		zap.L().Info("Seed: INITIAL_ADMIN_EMAIL/PASSWORD not set, skipping admin user creation")
+		return
+	}
+
+	// 校验管理员密码强度，防止弱密码
+	if _, err := utils.ValidatePassword(adminPassword, "admin"); err != nil {
+		zap.L().Error("Seed: INITIAL_ADMIN_PASSWORD does not meet strength requirements",
+			zap.Error(err),
+			zap.String("hint", "use at least 8 chars with letters and numbers"),
+		)
 		return
 	}
 
@@ -138,14 +147,13 @@ func seedAdminUser(userRepo repository.UserRepository, roleRepo repository.RoleR
 		PasswordChangedAt: &now,
 	}
 
-	if err := userRepo.Create(adminUser); err != nil {
-		zap.L().Error("Seed: failed to create admin user", zap.String("email", adminEmail), zap.Error(err))
-		return
-	}
-
-	// 分配 admin 角色
-	if err := roleRepo.AssignRoleToUser(adminUser.ID, adminRole.ID); err != nil {
-		zap.L().Error("Seed: failed to assign admin role", zap.Uint("user_id", adminUser.ID), zap.Error(err))
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(adminUser).Error; err != nil {
+			return err
+		}
+		return tx.Create(&repository.UserRole{UserID: adminUser.ID, RoleID: adminRole.ID}).Error
+	}); err != nil {
+		zap.L().Error("Seed: failed to create admin user with role in transaction", zap.String("email", adminEmail), zap.Error(err))
 		return
 	}
 

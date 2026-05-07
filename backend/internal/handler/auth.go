@@ -38,13 +38,13 @@ func NewAuthHandler(authService service.AuthService) AuthHandler {
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Email    string `json:"email" binding:"required,max=254"`
+	Password string `json:"password" binding:"required,min=8,max=64"`
 }
 
 type LoginRequest struct {
-	Email      string `json:"email" binding:"required"`
-	Password   string `json:"password" binding:"required"`
+	Email      string `json:"email" binding:"required,max=254"`
+	Password   string `json:"password" binding:"required,max=64"`
 	RememberMe bool   `json:"remember_me"`
 }
 
@@ -91,6 +91,9 @@ func (h *authHandler) Login(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
+
+	// 登录成功后轮换 CSRF session，防止会话固定攻击
+	dto.RotateCSRFSession(c)
 
 	cfg := config.Get()
 	accessTTL := time.Duration(cfg.Security.AccessTokenMaxTTLMin) * time.Minute
@@ -172,8 +175,8 @@ func (h *authHandler) GetCurrentUser(c *gin.Context) {
 }
 
 type ChangePasswordRequest struct {
-	CurrentPassword string `json:"current_password" binding:"required"`
-	NewPassword     string `json:"new_password" binding:"required"`
+	CurrentPassword string `json:"current_password" binding:"required,max=64"`
+	NewPassword     string `json:"new_password" binding:"required,min=8,max=64"`
 }
 
 func (h *authHandler) ChangePassword(c *gin.Context) {

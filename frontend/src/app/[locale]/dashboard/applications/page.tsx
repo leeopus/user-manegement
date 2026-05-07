@@ -34,6 +34,7 @@ export default function ApplicationsPage() {
   const [editApp, setEditApp] = useState<OAuthApplication | null>(null)
   const [deleteApp, setDeleteApp] = useState<OAuthApplication | null>(null)
   const [newSecret, setNewSecret] = useState<string | null>(null)
+  const [secretAutoHide, setSecretAutoHide] = useState(false)
 
   const [formName, setFormName] = useState("")
   const [formRedirectUris, setFormRedirectUris] = useState("")
@@ -81,6 +82,9 @@ export default function ApplicationsPage() {
         scopes: formScopes.trim() || undefined,
       })
       setNewSecret(result.client_secret || null)
+      setSecretAutoHide(false)
+      // 自动在 60 秒后清除 secret，减少暴露时间
+      setTimeout(() => setNewSecret(null), 60_000)
       setCreateOpen(false)
       resetForm()
       fetchApps(page)
@@ -163,7 +167,7 @@ export default function ApplicationsPage() {
       </div>
 
       {/* New secret banner */}
-      {newSecret && (
+      {newSecret && !secretAutoHide && (
         <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
           <p className="text-sm text-amber-800 mb-2">{t('secretWarning')}</p>
           <div className="flex items-center gap-2">
@@ -172,7 +176,7 @@ export default function ApplicationsPage() {
               {copiedId === "secret" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
-          <Button size="sm" variant="ghost" className="mt-2" onClick={() => setNewSecret(null)}>Dismiss</Button>
+          <Button size="sm" variant="ghost" className="mt-2" onClick={() => { setNewSecret(null); setSecretAutoHide(false) }}>Dismiss</Button>
         </div>
       )}
 

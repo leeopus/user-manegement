@@ -32,18 +32,36 @@ const REQUEST_TIMEOUT_MS = 30000
 // Token 刷新锁和重试队列，仅在客户端初始化，避免 SSR 环境下跨请求状态污染
 const isClient = typeof window !== 'undefined'
 
-let isRefreshing = false
-let refreshPromise: Promise<boolean> | null = null
-let lastRefreshAttempt = 0
+// 客户端专用可变状态，通过闭包隔离，SSR 不会初始化
+let clientState: {
+  isRefreshing: boolean
+  refreshPromise: Promise<boolean> | null
+  lastRefreshAttempt: number
+  retryQueue: Array<() => void>
+  isRetrying: boolean
+} | null = null
+
+function getState() {
+  if (!isClient) return null
+  if (!clientState) {
+    clientState = {
+      isRefreshing: false,
+      refreshPromise: null,
+      lastRefreshAttempt: 0,
+      retryQueue: [],
+      isRetrying: false,
+    }
+  }
+  return clientState
+}
+
 const REFRESH_COOLDOWN_MS = 5000
 
-let retryQueue: Array<() => void> = []
-let isRetrying = false
-
 function processRetryQueue() {
-  if (!isClient || isRetrying || retryQueue.length === 0) return
-  isRetrying = true
-  const next = retryQueue.shift()
+  const st = getState()
+  if (!st || st.isRetrying || st.retryQueue.length === 0) return
+  st.isRetrying = true
+  const next = st.retryQueue.shift()
   if (next) {
     next()
   }
@@ -57,12 +75,14 @@ function getAuthChannel(): BroadcastChannel | null {
   if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
     authChannel = new BroadcastChannel('auth_sync')
     authChannel.onmessage = (event: MessageEvent) => {
+      const st = getState()
+      if (!st) return
       if (event.data?.type === 'TOKEN_REFRESHED') {
-        isRefreshing = false
-        refreshPromise = null
+        st.isRefreshing = false
+        st.refreshPromise = null
       } else if (event.data?.type === 'LOGOUT') {
-        isRefreshing = false
-        refreshPromise = null
+        st.isRefreshing = false
+        st.refreshPromise = null
       }
     }
   }
@@ -70,20 +90,21 @@ function getAuthChannel(): BroadcastChannel | null {
 }
 
 async function refreshAccessToken(): Promise<boolean> {
-  if (!isClient) return false
+  const st = getState()
+  if (!st) return false
 
   const now = Date.now()
-  if (now - lastRefreshAttempt < REFRESH_COOLDOWN_MS) {
+  if (now - st.lastRefreshAttempt < REFRESH_COOLDOWN_MS) {
     return false
   }
 
-  if (isRefreshing && refreshPromise) {
-    return refreshPromise
+  if (st.isRefreshing && st.refreshPromise) {
+    return st.refreshPromise
   }
 
-  isRefreshing = true
-  lastRefreshAttempt = now
-  refreshPromise = (async () => {
+  st.isRefreshing = true
+  st.lastRefreshAttempt = now
+  st.refreshPromise = (async () => {
     try {
       const baseURL = API_BASE
       const url = baseURL ? `${baseURL}/api/v1/auth/refresh` : '/api/v1/auth/refresh'
@@ -109,12 +130,14 @@ async function refreshAccessToken(): Promise<boolean> {
     } catch {
       return false
     } finally {
-      isRefreshing = false
-      refreshPromise = null
+      if (clientState) {
+        clientState.isRefreshing = false
+        clientState.refreshPromise = null
+      }
     }
   })()
 
-  return refreshPromise
+  return st.refreshPromise
 }
 
 class APIClient {
@@ -175,7 +198,9 @@ class APIClient {
         if (refreshed) {
           // Queue the retry to serialize concurrent retries (avoids CSRF race)
           return new Promise<APIResponse<T>>((resolve) => {
-            retryQueue.push(async () => {
+            const st = getState()
+            if (!st) { resolve(data); return }
+            st.retryQueue.push(async () => {
               try {
                 let retryHeaders: Record<string, string> = {
                   'Content-Type': 'application/json',
@@ -214,7 +239,10 @@ class APIClient {
                   clearTimeout(retryTimeoutId)
                 }
               } finally {
-                isRetrying = false
+                const st2 = getState()
+                if (st2) {
+                  st2.isRetrying = false
+                }
                 processRetryQueue()
               }
             })

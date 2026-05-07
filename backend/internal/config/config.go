@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -58,6 +59,8 @@ type SecurityConfig struct {
 	AccessTokenMaxTTLMin int  `mapstructure:"access_token_max_ttl_min"`
 	RefreshTokenTTLDays  int  `mapstructure:"refresh_token_ttl_days"`
 	CSRFTokenTTLMin      int  `mapstructure:"csrf_token_ttl_min"`
+	AuditRetentionDays     int    `mapstructure:"audit_retention_days"`
+	PasswordResetSecret    string `mapstructure:"password_reset_secret"`
 }
 
 var AppConfig *Config
@@ -81,6 +84,8 @@ var flatToNested = map[string]string{
 	"ACCESS_TOKEN_MAX_TTL_MIN":  "security.access_token_max_ttl_min",
 	"REFRESH_TOKEN_TTL_DAYS":    "security.refresh_token_ttl_days",
 	"CSRF_TOKEN_TTL_MIN":        "security.csrf_token_ttl_min",
+	"AUDIT_RETENTION_DAYS":      "security.audit_retention_days",
+	"PASSWORD_RESET_SECRET":     "security.password_reset_secret",
 }
 
 func Load(configPath string) error {
@@ -105,6 +110,7 @@ func Load(configPath string) error {
 	viper.SetDefault("security.access_token_max_ttl_min", 15)
 	viper.SetDefault("security.refresh_token_ttl_days", 30)
 	viper.SetDefault("security.csrf_token_ttl_min", 30)
+	viper.SetDefault("security.audit_retention_days", 90)
 
 	// Read from config file (.env)
 	if err := viper.ReadInConfig(); err != nil {
@@ -133,6 +139,8 @@ func Load(configPath string) error {
 	viper.BindEnv("security.access_token_max_ttl_min", "ACCESS_TOKEN_MAX_TTL_MIN")
 	viper.BindEnv("security.refresh_token_ttl_days", "REFRESH_TOKEN_TTL_DAYS")
 	viper.BindEnv("security.csrf_token_ttl_min", "CSRF_TOKEN_TTL_MIN")
+	viper.BindEnv("security.audit_retention_days", "AUDIT_RETENTION_DAYS")
+	viper.BindEnv("security.password_reset_secret", "PASSWORD_RESET_SECRET")
 	viper.AutomaticEnv()
 
 	AppConfig = &Config{}
@@ -166,6 +174,17 @@ func Load(configPath string) error {
 	}
 	if sec.RefreshTokenTTLDays < 1 || sec.RefreshTokenTTLDays > 90 {
 		return fmt.Errorf("REFRESH_TOKEN_TTL_DAYS must be between 1 and 90, got %d", sec.RefreshTokenTTLDays)
+	}
+
+	// 密码重置密钥：未设置时回退到 JWT Secret 并告警，release 模式强制要求独立设置
+	if sec.PasswordResetSecret == "" {
+		if AppConfig.Server.GinMode == "release" {
+			return fmt.Errorf("PASSWORD_RESET_SECRET is required in release mode — generate with: openssl rand -hex 32")
+		}
+		zap.L().Warn("PASSWORD_RESET_SECRET not set, falling back to JWT_SECRET (recommended to set a separate secret)")
+		AppConfig.Security.PasswordResetSecret = AppConfig.JWT.Secret
+	} else if len(sec.PasswordResetSecret) < 32 {
+		return fmt.Errorf("PASSWORD_RESET_SECRET must be at least 32 bytes, got %d — generate with: openssl rand -hex 32", len(sec.PasswordResetSecret))
 	}
 
 	return nil

@@ -127,11 +127,11 @@ func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scop
 		return "", apperrors.ErrOAuthInvalidState
 	}
 
-	// PKCE 校验：如果提供了 code_challenge，必须指定 method
+	// PKCE 校验：如果提供了 code_challenge，必须使用 S256（禁用不安全的 plain 方法）
 	if codeChallenge != "" {
-		if codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
+		if codeChallengeMethod != "S256" {
 			return "", apperrors.ErrOAuthInvalidScope.WithDetails(map[string]interface{}{
-				"reason": "code_challenge_method must be S256 or plain",
+				"reason": "code_challenge_method must be S256",
 			})
 		}
 	}
@@ -389,12 +389,29 @@ func isValidRedirectURI(registeredURIs, requestedURI string) bool {
 	if !strings.HasPrefix(requestedURI, "http://") && !strings.HasPrefix(requestedURI, "https://") {
 		return false
 	}
+	requestedNormalized := normalizeURI(requestedURI)
 	for _, uri := range strings.Split(registeredURIs, ",") {
-		if strings.TrimSpace(uri) == requestedURI {
+		if normalizeURI(strings.TrimSpace(uri)) == requestedNormalized {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeURI 规范化 URI：去除尾部斜杠，统一 scheme+host 大小写
+func normalizeURI(rawURI string) string {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return rawURI
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	path := strings.TrimRight(parsed.Path, "/")
+	if path == "" {
+		path = "/"
+	}
+	parsed.Path = path
+	return parsed.String()
 }
 
 // isValidScope 验证请求的 scope 是否全部在应用注册的 scopes 范围内
@@ -476,16 +493,12 @@ func checkIPNotInternal(ip net.IP, host string) error {
 	return nil
 }
 
-// verifyPKCECodeVerifier 验证 PKCE code_verifier 是否匹配 code_challenge（RFC 7636）
+// verifyPKCECodeVerifier 验证 PKCE code_verifier 是否匹配 code_challenge（RFC 7636, S256 only）
 func verifyPKCECodeVerifier(codeVerifier, codeChallenge, method string) bool {
-	switch method {
-	case "S256":
-		hash := sha256.Sum256([]byte(codeVerifier))
-		encoded := base64.RawURLEncoding.EncodeToString(hash[:])
-		return encoded == codeChallenge
-	case "plain":
-		return codeVerifier == codeChallenge
-	default:
+	if method != "S256" {
 		return false
 	}
+	hash := sha256.Sum256([]byte(codeVerifier))
+	encoded := base64.RawURLEncoding.EncodeToString(hash[:])
+	return encoded == codeChallenge
 }

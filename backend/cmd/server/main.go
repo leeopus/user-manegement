@@ -210,7 +210,7 @@ func main() {
 		v1.POST("/auth/password/validate-token", middleware.PasswordResetRateLimit(redis.Client), passwordHandler.ValidateToken)
 
 		users := v1.Group("/users")
-		users.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermUserRead))
+		users.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermUserRead))
 		{
 			users.GET("", userHandler.ListUsers)
 			users.GET("/:id", userHandler.GetUser)
@@ -224,7 +224,7 @@ func main() {
 		}
 
 		roles := v1.Group("/roles")
-		roles.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermRoleManage))
+		roles.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermRoleManage))
 		{
 			roles.GET("", roleHandler.ListRoles)
 			roles.GET("/:id", roleHandler.GetRole)
@@ -236,7 +236,7 @@ func main() {
 		}
 
 		permissions := v1.Group("/permissions")
-		permissions.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermPermissionManage))
+		permissions.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermPermissionManage))
 		{
 			permissions.GET("", permissionHandler.ListPermissions)
 			permissions.GET("/:id", permissionHandler.GetPermission)
@@ -253,7 +253,7 @@ func main() {
 		}
 
 		oauthApps := v1.Group("/oauth/applications")
-		oauthApps.Use(middleware.Auth(blacklistMgr), middleware.RequirePermission(rbacCfg, service.PermOAuthManage))
+		oauthApps.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermOAuthManage))
 		{
 			oauthApps.GET("", oauthHandler.ListApplications)
 			oauthApps.GET("/:id", oauthHandler.GetApplication)
@@ -284,6 +284,30 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// 审计日志定时清理：每天执行，删除超过保留期的记录
+	retentionDays := cfg.Security.AuditRetentionDays
+	if retentionDays <= 0 {
+		retentionDays = 90
+	}
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if deleted, err := auditLogRepo.CleanupOlderThan(retentionDays); err != nil {
+					zap.L().Error("Audit log cleanup failed", zap.Error(err))
+				} else if deleted > 0 {
+					zap.L().Info("Audit log cleanup completed", zap.Int64("deleted", deleted), zap.Int("retention_days", retentionDays))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	zap.L().Info("Audit log cleanup scheduled", zap.Int("retention_days", retentionDays))
+
 	<-ctx.Done()
 
 	zap.L().Info("Shutting down server...")

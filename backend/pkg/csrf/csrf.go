@@ -51,7 +51,21 @@ func tokenHash(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// GenerateToken 生成 CSRF token 并存储到 Redis，绑定到 sessionID
+// incrAndCapSessionTokens 原子性递增并限制 session token 计数（Lua 脚本避免竞态）
+var incrAndCapSessionTokens = redis.NewScript(`
+	local key = KEYS[1]
+	local max_tokens = tonumber(ARGV[1])
+	local ttl = tonumber(ARGV[2])
+
+	local count = redis.call("INCR", key)
+	redis.call("EXPIRE", key, ttl)
+
+	if count > max_tokens then
+		redis.call("SET", key, tostring(max_tokens), "EX", ttl)
+	end
+
+	return count
+`)
 func (m *Manager) GenerateToken(sessionID string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -71,19 +85,15 @@ func (m *Manager) GenerateToken(sessionID string) (string, error) {
 		}
 
 		sessionKey := fmt.Sprintf("%s%s", csrfSessionPrefix, sessionID)
-		m.redis.Incr(ctx, sessionKey)
-		m.redis.Expire(ctx, sessionKey, getCSRFTokenTTL())
-
-		count, _ := m.redis.Get(ctx, sessionKey).Int()
-		if count > csrfSessionMaxTokens {
-			m.redis.Set(ctx, sessionKey, fmt.Sprintf("%d", csrfSessionMaxTokens), getCSRFTokenTTL())
-		}
+		ctx2, cancel2 := m.ctx()
+		defer cancel2()
+		incrAndCapSessionTokens.Run(ctx2, m.redis, []string{sessionKey}, csrfSessionMaxTokens, int(getCSRFTokenTTL().Seconds()))
 	}
 
 	return token, nil
 }
 
-// ValidateToken 验证 CSRF token（仅读取不删除，Token 在 TTL 内可复用）
+// ValidateToken 验证 CSRF token
 func (m *Manager) ValidateToken(token, sessionID string) error {
 	if token == "" {
 		return ErrInvalidToken

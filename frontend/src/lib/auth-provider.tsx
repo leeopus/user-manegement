@@ -9,6 +9,7 @@ import type { User } from './types'
 interface AuthContextType {
   user: User | null
   loading: boolean
+  initError: boolean
   isAuthenticated: boolean
   login: (email: string, password: string, rememberMe?: boolean) => Promise<void>
   logout: () => Promise<void>
@@ -22,34 +23,41 @@ const PUBLIC_PATHS = ['/login', '/register', '/forgot-password', '/reset-passwor
 // Retry config for transient network errors
 const INIT_RETRY_COUNT = 2
 const INIT_RETRY_DELAY_MS = 1000
+const SERVER_ERROR_MAX_RETRIES = 4
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [initError, setInitError] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
 
   // 初始化：通过 httpOnly cookie 获取当前用户，区分网络错误和认证失败
   useEffect(() => {
-    const initAuth = async (retriesLeft = INIT_RETRY_COUNT) => {
+    const initAuth = async (retriesLeft = INIT_RETRY_COUNT, serverRetriesLeft = SERVER_ERROR_MAX_RETRIES) => {
       let shouldKeepLoading = false
       try {
         const currentUser = await api.getUserInfo()
         setUser(currentUser)
+        setInitError(false)
       } catch (error) {
         if (isNetworkError(error) && retriesLeft > 0) {
           // 网络错误：延迟重试，不登出用户，保持 loading 状态
           shouldKeepLoading = true
-          setTimeout(() => initAuth(retriesLeft - 1), INIT_RETRY_DELAY_MS)
+          setTimeout(() => initAuth(retriesLeft - 1, serverRetriesLeft), INIT_RETRY_DELAY_MS)
           return
         }
         if (isServerError(error)) {
-          // 服务端 5xx 错误：临时故障，不登出用户，保持 loading 以显示错误状态
-          shouldKeepLoading = true
-          setTimeout(() => initAuth(retriesLeft - 1), INIT_RETRY_DELAY_MS * 3)
-          return
-        }
-        if (isAuthError(error)) {
+          if (serverRetriesLeft > 0) {
+            // 服务端 5xx 错误：临时故障，延迟重试
+            shouldKeepLoading = true
+            setTimeout(() => initAuth(retriesLeft, serverRetriesLeft - 1), INIT_RETRY_DELAY_MS * 3)
+            return
+          }
+          // 超过最大重试次数，显示错误状态
+          setInitError(true)
+          setUser(null)
+        } else if (isAuthError(error)) {
           // 认证失败（401/403）：确实没有有效 session
           setUser(null)
         } else {
@@ -99,6 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const currentUser = await api.getUserInfo()
       setUser(currentUser)
+      setInitError(false)
     } catch (error) {
       if (isNetworkError(error) || isServerError(error)) {
         // 网络波动或服务端临时故障，保持现有用户状态
@@ -114,6 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         loading,
+        initError,
         isAuthenticated: !!user,
         login,
         logout,

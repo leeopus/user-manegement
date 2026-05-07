@@ -10,7 +10,7 @@ import (
 
 type User struct {
 	gorm.Model
-	Username          string     `gorm:"size:50;uniqueIndex" json:"username"`
+	Username          string     `gorm:"size:50;uniqueIndex;not null" json:"username"`
 	Email             string     `gorm:"size:100;uniqueIndex;not null" json:"email"`
 	PasswordHash      string     `gorm:"size:255;not null" json:"-"`
 	Avatar            string     `gorm:"size:255" json:"avatar"`
@@ -143,7 +143,7 @@ func (r *userRepository) FindByUsername(username string) (*User, error) {
 }
 
 func (r *userRepository) Update(user *User) error {
-	return r.db.Model(user).Select("username", "email", "password_hash", "status", "avatar").Updates(user).Error
+	return r.db.Model(user).Select("username", "email", "password_hash", "status", "avatar", "password_changed_at").Updates(user).Error
 }
 
 func (r *userRepository) UpdateStatus(id uint, status string) error {
@@ -193,8 +193,17 @@ func (r *userRepository) UpdateLastLogin(id uint, ip string) error {
 
 func (r *userRepository) HardDelete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("DELETE FROM user_roles WHERE user_id = ?", id).Error; err != nil {
-			return err
+		// 清理所有关联数据，避免孤立记录
+		tables := []string{
+			"user_roles",
+			"password_histories",
+			"password_reset_tokens",
+			"oauth_tokens",
+		}
+		for _, table := range tables {
+			if err := tx.Exec("DELETE FROM "+table+" WHERE user_id = ?", id).Error; err != nil {
+				return err
+			}
 		}
 		return tx.Unscoped().Delete(&User{}, id).Error
 	})
@@ -218,7 +227,7 @@ func (r *userRepository) CreateWithTx(tx *gorm.DB, user *User) error {
 }
 
 func (r *userRepository) UpdateWithTx(tx *gorm.DB, user *User) error {
-	return tx.Model(user).Select("username", "email", "password_hash", "status", "avatar").Updates(user).Error
+	return tx.Model(user).Select("username", "email", "password_hash", "status", "avatar", "password_changed_at").Updates(user).Error
 }
 
 func (r *userRepository) FindByEmailWithTx(tx *gorm.DB, email string) (*User, error) {

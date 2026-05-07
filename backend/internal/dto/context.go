@@ -46,7 +46,7 @@ func SessionFingerprint(c *gin.Context) string {
 	// 生成新的随机 session ID（32 字节 = 256 bit 熵）
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// 回退到 IP+UA（仅在 rand.Read 失败时）
+		// crypto/rand 失败极为罕见，返回空字符串由调用方拒绝请求
 		return fallbackSessionFingerprint(c)
 	}
 	sessionID = hex.EncodeToString(b)
@@ -73,5 +73,33 @@ func SessionFingerprint(c *gin.Context) string {
 
 // fallbackSessionFingerprint 仅在随机数生成失败时使用
 func fallbackSessionFingerprint(c *gin.Context) string {
-	return c.ClientIP()
+	// crypto/rand 失败极为罕见，拒绝请求而非降级到 IP（防止 NAT 环境下 CSRF 被绕过）
+	return ""
+}
+
+// RotateCSRFSession 登录成功后重新生成 CSRF session cookie，降低会话固定攻击风险
+func RotateCSRFSession(c *gin.Context) string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	sessionID := hex.EncodeToString(b)
+
+	cookieSecure := false
+	if cfg := config.Get(); cfg != nil && cfg.Security.CookieSecure {
+		cookieSecure = true
+	}
+
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie(
+		csrfSessionCookie,
+		sessionID,
+		86400,
+		"/",
+		"",
+		cookieSecure,
+		true,
+	)
+
+	return sessionID
 }

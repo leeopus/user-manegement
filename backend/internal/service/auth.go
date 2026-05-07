@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	apperrors "github.com/user-system/backend/pkg/errors"
 	"github.com/user-system/backend/pkg/utils"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -430,12 +432,31 @@ func (s *authService) ChangePassword(userID uint, currentPassword, newPassword s
 		return apperrors.ErrPasswordSameAsOld
 	}
 
-	histories, _ := s.passwordHistoryRepo.FindByUserID(user.ID, 5)
-	for _, h := range histories {
-		if utils.CheckPassword(newPassword, h.PasswordHash) {
-			return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
-				"reason": "new password was used recently, please choose a different one",
+	histories, histErr := s.passwordHistoryRepo.FindByUserID(user.ID, 5)
+	if histErr != nil {
+		zap.L().Error("Failed to check password history, aborting change for security",
+			zap.Uint("user_id", user.ID), zap.Error(histErr))
+		return apperrors.ErrInternalServer
+	}
+	if len(histories) > 0 {
+		g, _ := errgroup.WithContext(context.Background())
+		reused := make([]bool, len(histories))
+		for i, h := range histories {
+			i, h := i, h
+			g.Go(func() error {
+				if utils.CheckPassword(newPassword, h.PasswordHash) {
+					reused[i] = true
+				}
+				return nil
 			})
+		}
+		_ = g.Wait()
+		for _, r := range reused {
+			if r {
+				return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+					"reason": "new password was used recently, please choose a different one",
+				})
+			}
 		}
 	}
 
@@ -444,34 +465,46 @@ func (s *authService) ChangePassword(userID uint, currentPassword, newPassword s
 		return apperrors.ErrInternalServer
 	}
 
-	user.PasswordHash = hashedPassword
-	now := time.Now()
-	user.PasswordChangedAt = &now
-	if err := s.userRepo.Update(user); err != nil {
-		return apperrors.ErrInternalServer
-	}
+	// 密码更新、历史记录必须在同一事务中，防止部分写入导致密码历史绕过
+	txErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
+		user.PasswordHash = hashedPassword
+		now := time.Now()
+		user.PasswordChangedAt = &now
+		if err := s.userRepo.UpdateWithTx(tx, user); err != nil {
+			return err
+		}
 
-	if err := s.passwordHistoryRepo.Create(&repository.PasswordHistory{
-		UserID:       user.ID,
-		PasswordHash: hashedPassword,
-	}); err != nil {
-		zap.L().Warn("Failed to save password history on change", zap.Error(err))
+		if err := s.passwordHistoryRepo.CreateWithTx(tx, &repository.PasswordHistory{
+			UserID:       user.ID,
+			PasswordHash: hashedPassword,
+		}); err != nil {
+			zap.L().Warn("Failed to save password history on change", zap.Error(err))
+		}
+		return nil
+	})
+	if txErr != nil {
+		return apperrors.ErrInternalServer
 	}
 	_ = s.passwordHistoryRepo.CleanupOld(user.ID, 5)
 
 	// 密码修改后吊销所有已有 token，强制重新登录
+	var revokeErr error
 	if err := s.refreshTokenMgr.RevokeAll(user.ID); err != nil {
-		zap.L().Error("CRITICAL: failed to revoke refresh tokens after password change, old sessions may remain active",
+		zap.L().Error("CRITICAL: failed to revoke refresh tokens after password change",
 			zap.Uint("user_id", user.ID), zap.Error(err))
+		revokeErr = err
 	}
 	if err := s.blacklistMgr.RevokeAllUserTokens(user.ID); err != nil {
-		zap.L().Error("CRITICAL: failed to blacklist user tokens after password change, old sessions may remain active",
+		zap.L().Error("CRITICAL: failed to blacklist user tokens after password change",
 			zap.Uint("user_id", user.ID), zap.Error(err))
+		revokeErr = err
 	}
 
-	s.auditLogger.Log(&auditCtx, "change_password", "user", map[string]interface{}{
-		"user_id": user.ID,
-	})
+	s.auditLogger.Log(&auditCtx, "change_password", "user", nil)
+
+	if revokeErr != nil {
+		return apperrors.ErrPasswordChangeRevokeFailed
+	}
 
 	return nil
 }

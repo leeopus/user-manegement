@@ -130,6 +130,12 @@ var (
 		"AUTH_PASSWORD_SAME_AS_OLD",
 		http.StatusBadRequest,
 	)
+
+	ErrPasswordChangeRevokeFailed = New(
+		"AUTH_PASSWORD_CHANGE_REVOKE_FAILED_500",
+		"AUTH_PASSWORD_CHANGE_REVOKE_FAILED",
+		http.StatusInternalServerError,
+	)
 )
 
 // =====================================================

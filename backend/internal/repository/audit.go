@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -31,6 +32,7 @@ type AuditLogRepository interface {
 	FindByUserID(userID uint, offset, limit int) ([]AuditLog, int64, error)
 	List(offset, limit int) ([]AuditLog, int64, error)
 	ListFiltered(offset, limit int, filters AuditLogFilters) ([]AuditLog, int64, error)
+	CleanupOlderThan(retentionDays int) (int64, error)
 }
 
 type auditLogRepository struct {
@@ -76,7 +78,10 @@ func (r *auditLogRepository) ListFiltered(offset, limit int, filters AuditLogFil
 		query = query.Where("resource = ?", filters.Resource)
 	}
 	if filters.Search != "" {
-		search := "%" + filters.Search + "%"
+		search := filters.Search
+		search = strings.ReplaceAll(search, "%", "\\%")
+		search = strings.ReplaceAll(search, "_", "\\_")
+		search = "%" + search + "%"
 		query = query.Where("action ILIKE ? OR resource ILIKE ? OR details ILIKE ?", search, search, search)
 	}
 
@@ -102,4 +107,10 @@ type RolePermission struct {
 	Role         Role       `gorm:"foreignKey:RoleID"`
 	Permission   Permission `gorm:"foreignKey:PermissionID"`
 	CreatedAt    time.Time
+}
+
+func (r *auditLogRepository) CleanupOlderThan(retentionDays int) (int64, error) {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	result := r.db.Where("created_at < ?", cutoff).Delete(&AuditLog{})
+	return result.RowsAffected, result.Error
 }

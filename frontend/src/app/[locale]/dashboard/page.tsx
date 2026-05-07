@@ -3,24 +3,29 @@
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { api } from '@/lib/api'
+import { useAuth, hasPermission } from '@/lib/auth-provider'
 
 export default function DashboardPage() {
   const t = useTranslations('dashboard')
+  const { user, loading: authLoading } = useAuth()
   const [stats, setStats] = useState({ users: 0, roles: 0, applications: 0 })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (authLoading || !user) return
+
     async function fetchStats() {
       try {
-        const [usersData, rolesData, appsData] = await Promise.allSettled([
-          api.listUsers(1, 1),
-          api.listRoles(1, 1),
-          api.listApplications(1, 1),
-        ])
+        const promises: Promise<{ total: number } | null>[] = [
+          hasPermission(user, "users:read") ? api.listUsers(1, 1).catch(() => null) : Promise.resolve(null),
+          hasPermission(user, "roles:manage") ? api.listRoles(1, 1).catch(() => null) : Promise.resolve(null),
+          hasPermission(user, "oauth:manage") ? api.listApplications(1, 1).catch(() => null) : Promise.resolve(null),
+        ]
+        const [usersData, rolesData, appsData] = await Promise.all(promises)
         setStats({
-          users: usersData.status === 'fulfilled' ? usersData.value.total : 0,
-          roles: rolesData.status === 'fulfilled' ? rolesData.value.total : 0,
-          applications: appsData.status === 'fulfilled' ? appsData.value.total : 0,
+          users: (usersData as { total: number } | null)?.total ?? 0,
+          roles: (rolesData as { total: number } | null)?.total ?? 0,
+          applications: (appsData as { total: number } | null)?.total ?? 0,
         })
       } catch {
         // keep default zeros
@@ -29,7 +34,7 @@ export default function DashboardPage() {
       }
     }
     fetchStats()
-  }, [])
+  }, [authLoading, user])
 
   return (
     <div>
