@@ -78,7 +78,7 @@ func main() {
 
 	zap.L().Info("Database connected successfully")
 
-	if os.Getenv("AUTO_MIGRATE") == "true" {
+	if cfg.GetBoolEnv("AUTO_MIGRATE", false) {
 		if err := db.AutoMigrate(
 			&repository.User{},
 			&repository.Role{},
@@ -138,7 +138,7 @@ func main() {
 	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogger, rbacCache)
 	permissionService := service.NewPermissionService(permissionRepo, auditLogger, rbacCache)
 	oauthService := service.NewOAuthService(oauthAppRepo, oauthTokenRepo, userRepo, auditLogger, redis.Client, blacklistMgr)
-	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr)
+	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr, redis.Client)
 
 	rbacCfg := middleware.RBACConfig{
 		UserRepo:     userRepo,

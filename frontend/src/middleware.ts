@@ -31,7 +31,9 @@ function addSecurityHeaders(response: NextResponse): void {
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      "script-src 'self'",
+      process.env.NODE_ENV === 'production'
+        ? "script-src 'self'"
+        : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self'",
@@ -108,8 +110,6 @@ export default function middleware(request: NextRequest) {
   return response;
 }
 
-const localeMatcher = routing.locales.join('|');
-
 export const config = {
-  matcher: ['/', `/(${localeMatcher})/:path*`]
+  matcher: ['/', '/(zh|en)/:path*']
 };

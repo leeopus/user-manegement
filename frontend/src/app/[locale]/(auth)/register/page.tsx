@@ -96,8 +96,6 @@ export default function RegisterPage() {
     if (!emailResult.valid) errors.email = emailResult.error
     if (passwordResult.error) {
       errors.password = passwordResult.error
-    } else if (passwordResult.strength !== undefined && passwordResult.strength < StrengthLevel.Good) {
-      errors.password = "validation.password.tooWeak"
     }
 
     if (Object.keys(errors).length > 0) {
@@ -221,22 +219,6 @@ export default function RegisterPage() {
                       <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
                     )}
                     {tv('requirements.length')}
-                  </li>
-                  <li className={`flex items-center ${/[a-z]/.test(password) && /\d/.test(password) ? 'text-green-600' : 'text-blue-600'}`}>
-                    {/[a-z]/.test(password) && /\d/.test(password) ? (
-                      <Check className="h-3 w-3 mr-2" />
-                    ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
-                    )}
-                    {tv('requirements.complexity')}
-                  </li>
-                  <li className={`flex items-center ${passwordStrength.strength >= StrengthLevel.Good ? 'text-green-600' : 'text-blue-600'}`}>
-                    {passwordStrength.strength >= StrengthLevel.Good ? (
-                      <Check className="h-3 w-3 mr-2" />
-                    ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
-                    )}
-                    {tv('passwordStrength')}
                   </li>
                 </ul>
               </div>

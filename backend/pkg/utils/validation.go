@@ -30,13 +30,13 @@ type PasswordPolicy struct {
 	ForbidUsername  bool
 }
 
-// 默认密码策略（安全模式 - 要求字符多样性）
+// 默认密码策略（NIST SP 800-63B 推荐模式 - 仅要求长度，不强制字符类型）
 var DefaultPasswordPolicy = PasswordPolicy{
 	MinLength:      8,
 	MaxLength:      64,
-	RequireUpper:   true,
-	RequireLower:   true,
-	RequireNumber:  true,
+	RequireUpper:   false,
+	RequireLower:   false,
+	RequireNumber:  false,
 	RequireSpecial: false,
 	ForbidUsername: true,
 }

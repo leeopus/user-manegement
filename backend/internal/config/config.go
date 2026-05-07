@@ -209,6 +209,22 @@ func (c *Config) GetIntEnv(key string, defaultVal int) int {
 			return n
 		}
 	}
+	if v := viper.GetString(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return defaultVal
+}
+
+// GetBoolEnv 从环境变量或 .env 配置读取布尔值
+func (c *Config) GetBoolEnv(key string, defaultVal bool) bool {
+	if v := os.Getenv(key); v != "" {
+		return strings.EqualFold(v, "true")
+	}
+	if v := viper.GetString(key); v != "" {
+		return strings.EqualFold(v, "true")
+	}
 	return defaultVal
 }
 

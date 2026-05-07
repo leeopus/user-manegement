@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/user-system/backend/internal/dto"
 	"github.com/user-system/backend/internal/email"
 	"github.com/user-system/backend/internal/repository"
@@ -35,6 +37,7 @@ type passwordResetService struct {
 	frontendURL         string
 	refreshTokenMgr     *auth.RefreshTokenManager
 	blacklistMgr        *auth.TokenBlacklistManager
+	redisClient         *redis.Client
 }
 
 func NewPasswordResetService(
@@ -46,6 +49,7 @@ func NewPasswordResetService(
 	frontendURL string,
 	refreshTokenMgr *auth.RefreshTokenManager,
 	blacklistMgr *auth.TokenBlacklistManager,
+	redisClient *redis.Client,
 ) PasswordResetService {
 	return &passwordResetService{
 		userRepo:            userRepo,
@@ -57,6 +61,7 @@ func NewPasswordResetService(
 		frontendURL:         frontendURL,
 		refreshTokenMgr:     refreshTokenMgr,
 		blacklistMgr:        blacklistMgr,
+		redisClient:         redisClient,
 	}
 }
 
@@ -71,12 +76,28 @@ func generateSecureToken() (string, error) {
 
 // RequestPasswordReset 请求密码重置（常量时间响应，防止时序侧信道枚举邮箱）
 func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
+	normalizedEmail := strings.ToLower(strings.TrimSpace(emailAddr))
+
+	// 邮箱维度冷却检查：同一邮箱每 60 秒只能请求一次
+	if s.redisClient != nil {
+		cooldownKey := fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail)
+		ctx := context.Background()
+		ttl, err := s.redisClient.TTL(ctx, cooldownKey).Result()
+		if err == nil && ttl > 0 {
+			return nil // 冷却中，静默返回成功（防止枚举）
+		}
+	}
+
 	user, err := s.userRepo.FindByEmail(emailAddr)
 
 	if err != nil {
 		dummyToken, _ := generateSecureToken()
 		_ = repository.HashResetToken(dummyToken)
 		s.tokenRepo.TouchDummy()
+		// 不存在的邮箱也设冷却，保持常量时间
+		if s.redisClient != nil {
+			s.redisClient.Set(context.Background(), fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail), "1", 60*time.Second)
+		}
 		return nil
 	}
 
@@ -108,6 +129,11 @@ func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
 	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID}, "password_reset_requested", "user", map[string]interface{}{
 		"email": emailAddr,
 	})
+
+	// 设置邮箱冷却，60 秒内不可重复请求
+	if s.redisClient != nil {
+		s.redisClient.Set(context.Background(), fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail), "1", 60*time.Second)
+	}
 
 	return nil
 }
