@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -16,7 +15,6 @@ import (
 	apperrors "github.com/user-system/backend/pkg/errors"
 	"github.com/user-system/backend/pkg/utils"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -35,11 +33,17 @@ var (
 	dummyHashOnce sync.Once
 )
 
+// precomputedDummyHash 是一个合法的 bcrypt hash（cost=12），用于 crypto/rand 失败时的 fallback。
+// 对应明文 "constant-time-dummy-value"，保证 bcrypt.CompareHashAndPassword 正常执行，
+// 维持常量时间比较以防止时序侧信道枚举。
+const precomputedDummyHash = "$2a$12$FGm4lLxTOiUDYUsXlf3hM.7y/8P5.i5q3FsOFjcUTD5tKEUctCmzG"
+
 func getDummyHash() string {
 	dummyHashOnce.Do(func() {
 		h, err := utils.HashPassword("constant-time-dummy-value")
 		if err != nil {
-			dummyHash = "$2a$12$000000000000000000000uGYDq1WbOaJBgFBaFBaFBaFBaFBaFBa"
+			zap.L().Error("crypto/rand failed, using precomputed dummy hash")
+			dummyHash = precomputedDummyHash
 			return
 		}
 		dummyHash = h
@@ -105,6 +109,10 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 	// 无论邮箱是否存在，都执行一次 bcrypt 保持恒定时间，防止时序侧信道枚举
 	if emailExists {
 		_, _ = utils.HashPassword("constant-time-dummy-value")
+		// 时序均衡：模拟注册路径的 DB 事务延迟，缩小两条路径的响应时间差异
+		_ = s.userRepo.Transaction(func(tx *gorm.DB) error {
+			return nil
+		})
 		// 不返回"邮箱已存在"错误，防止邮箱枚举攻击
 		return nil, apperrors.ErrRegisterSilent.WithDetails(map[string]interface{}{
 			"hint": "if_this_email_is_available_you_will_receive_confirmation",
@@ -199,14 +207,20 @@ func (s *authService) Login(email, password, clientIP, userAgent string, remembe
 	if err != nil {
 		_ = utils.CheckPassword("constant-time-dummy-value", getDummyHash())
 
-		s.lockoutManager.RecordFailedAttempt(email, clientIP)
+		if err := s.lockoutManager.RecordFailedAttempt(email, clientIP); err != nil {
+			zap.L().Error("CRITICAL: failed to record failed login attempt, lockout may be bypassed",
+				zap.String("email", email), zap.String("client_ip", clientIP), zap.Error(err))
+		}
 		return nil, "", "", apperrors.ErrInvalidCredentials.WithDetails(map[string]interface{}{
 			"hint": "multiple_failures_will_lock_account",
 		})
 	}
 
 	if !utils.CheckPassword(password, user.PasswordHash) {
-		s.lockoutManager.RecordFailedAttempt(email, clientIP)
+		if err := s.lockoutManager.RecordFailedAttempt(email, clientIP); err != nil {
+			zap.L().Error("CRITICAL: failed to record failed login attempt, lockout may be bypassed",
+				zap.String("email", email), zap.String("client_ip", clientIP), zap.Error(err))
+		}
 		return nil, "", "", apperrors.ErrInvalidCredentials.WithDetails(map[string]interface{}{
 			"hint": "multiple_failures_will_lock_account",
 		})
@@ -438,25 +452,11 @@ func (s *authService) ChangePassword(userID uint, currentPassword, newPassword s
 			zap.Uint("user_id", user.ID), zap.Error(histErr))
 		return apperrors.ErrInternalServer
 	}
-	if len(histories) > 0 {
-		g, _ := errgroup.WithContext(context.Background())
-		reused := make([]bool, len(histories))
-		for i, h := range histories {
-			i, h := i, h
-			g.Go(func() error {
-				if utils.CheckPassword(newPassword, h.PasswordHash) {
-					reused[i] = true
-				}
-				return nil
+	for _, h := range histories {
+		if utils.CheckPassword(newPassword, h.PasswordHash) {
+			return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+				"reason": "new password was used recently, please choose a different one",
 			})
-		}
-		_ = g.Wait()
-		for _, r := range reused {
-			if r {
-				return apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
-					"reason": "new password was used recently, please choose a different one",
-				})
-			}
 		}
 	}
 

@@ -11,7 +11,6 @@ import (
 
 var (
 	Client *redis.Client
-	Ctx    = context.Background()
 )
 
 // InitRedis 初始化 Redis 连接
@@ -33,6 +32,11 @@ func InitRedis(url string) error {
 
 	log.Println("Redis connected successfully")
 	return nil
+}
+
+// IsAvailable 检查 Redis 客户端是否已初始化且可用
+func IsAvailable() bool {
+	return Client != nil
 }
 
 // Close 关闭 Redis 连接

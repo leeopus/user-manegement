@@ -22,9 +22,11 @@ func setupTestConfig(t *testing.T) {
 
 	config.AppConfig = &config.Config{
 		JWT: config.JWTConfig{
-			Secret:            "test-secret-that-is-at-least-32-bytes-long-for-testing",
-			Expiration:        3600000000000,
-			RefreshExpiration: 7200000000000000,
+			Secret: "test-secret-that-is-at-least-32-bytes-long-for-testing",
+		},
+		Security: config.SecurityConfig{
+			AccessTokenMaxTTLMin: 15,
+			RefreshTokenTTLDays: 30,
 		},
 	}
 	// Re-init keys since config is now set

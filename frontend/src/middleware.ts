@@ -47,7 +47,9 @@ function addSecurityHeaders(response: NextResponse): void {
   }
 }
 
-// 验证 JWT 格式：必须为三段 base64url 编码结构
+// UX-only optimization: checks JWT format (three dot-separated base64url segments).
+// This is NOT a security boundary — a fake cookie like "a.b.c" will bypass this check.
+// Real authentication is enforced by the backend via HttpOnly cookies + /auth/me validation.
 function isValidJWTFormat(token: string): boolean {
   const parts = token.split('.');
   if (parts.length !== 3) return false;

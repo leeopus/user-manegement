@@ -189,6 +189,9 @@ func (s *roleService) RemoveRolePermission(roleID, permissionID uint, auditCtx d
 	if _, err := s.roleRepo.FindByID(roleID); err != nil {
 		return apperrors.ErrRoleNotFound
 	}
+	if _, err := s.permissionRepo.FindByID(permissionID); err != nil {
+		return apperrors.ErrPermissionNotFound
+	}
 
 	if err := s.roleRepo.RemovePermission(roleID, permissionID); err != nil {
 		return apperrors.ErrInternalServer

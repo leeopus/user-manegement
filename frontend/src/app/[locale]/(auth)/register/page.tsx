@@ -94,7 +94,11 @@ export default function RegisterPage() {
 
     const errors: ValidationErrors = {}
     if (!emailResult.valid) errors.email = emailResult.error
-    if (passwordResult.error) errors.password = passwordResult.error
+    if (passwordResult.error) {
+      errors.password = passwordResult.error
+    } else if (passwordResult.strength !== undefined && passwordResult.strength < StrengthLevel.Good) {
+      errors.password = "validation.password.tooWeak"
+    }
 
     if (Object.keys(errors).length > 0) {
       setValidationErrors(errors)

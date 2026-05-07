@@ -53,7 +53,7 @@ type OAuthApplicationResponse struct {
 	ID           uint      `json:"id"`
 	Name         string    `json:"name"`
 	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret,omitempty"` // 仅在创建时返回
+	ClientSecret string    `json:"client_secret,omitempty"` // 仅在创建时通过赋值返回
 	RedirectURIs string    `json:"redirect_uris"`
 	Scopes       string    `json:"scopes,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`

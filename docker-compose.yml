@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL 数据库
   postgres:
@@ -32,6 +30,8 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: "json-file"
       options:
@@ -48,12 +48,16 @@ services:
       - "6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required} --maxmemory 256mb --maxmemory-policy allkeys-lru
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    environment:
+      - REDISCLI_AUTH=${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD", "sh", "-c", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     networks:
       - backend-net
     deploy:
@@ -64,6 +68,8 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: "json-file"
       options:
@@ -107,6 +113,8 @@ services:
         reservations:
           cpus: '0.5'
           memory: 256M
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: "json-file"
       options:
@@ -145,6 +153,8 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: "json-file"
       options:

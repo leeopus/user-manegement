@@ -207,7 +207,7 @@ func main() {
 
 		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.RequestReset)
 		v1.POST("/auth/password/reset", middleware.CSRF(redis.Client), passwordHandler.ResetPassword)
-		v1.POST("/auth/password/validate-token", middleware.PasswordResetRateLimit(redis.Client), passwordHandler.ValidateToken)
+		v1.POST("/auth/password/validate-token", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.ValidateToken)
 
 		users := v1.Group("/users")
 		users.Use(middleware.Auth(blacklistMgr), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermUserRead))
@@ -291,6 +291,13 @@ func main() {
 		retentionDays = 90
 	}
 	go func() {
+		// 启动时立即执行一次清理
+		if deleted, err := auditLogRepo.CleanupOlderThan(retentionDays); err != nil {
+			zap.L().Error("Audit log initial cleanup failed", zap.Error(err))
+		} else if deleted > 0 {
+			zap.L().Info("Audit log initial cleanup completed", zap.Int64("deleted", deleted), zap.Int("retention_days", retentionDays))
+		}
+
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -335,7 +342,7 @@ func healthCheckPublic(sqlDB *sql.DB) gin.HandlerFunc {
 			}
 		}
 
-		if redis.Client != nil {
+		if redis.IsAvailable() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			if err := redis.Client.Ping(ctx).Err(); err != nil {
@@ -365,7 +372,7 @@ func healthCheckDetail(sqlDB *sql.DB) gin.HandlerFunc {
 			}
 		}
 
-		if redis.Client != nil {
+		if redis.IsAvailable() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			if err := redis.Client.Ping(ctx).Err(); err != nil {

@@ -187,7 +187,7 @@ class APIClient {
       // 防止非 JSON 响应（如 502/504 HTML 错误页）导致 JSON 解析失败
       const contentType = response.headers.get('content-type') || ''
       if (!contentType.includes('application/json')) {
-        throw new Error(`NETWORK_ERROR: Server returned non-JSON response (HTTP ${response.status})`)
+        throw new Error('NETWORK_ERROR: Server returned an unexpected response. Please try again later.')
       }
 
       const data: APIResponse<T> = await response.json()

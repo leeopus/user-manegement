@@ -32,7 +32,6 @@ type OAuthService interface {
 	ListApplications(offset, pageSize int) ([]repository.OAuthApplication, int64, error)
 	Authorize(userID uint, clientID, redirectURI, state, scope, codeChallenge, codeChallengeMethod, ipAddress, userAgent string) (string, error)
 	Token(clientID, clientSecret, code, redirectURI, codeVerifier string) (string, string, error)
-	Userinfo(accessToken string) (*repository.User, error)
 	UserinfoByID(userID uint) (*repository.User, error)
 }
 
@@ -182,7 +181,7 @@ func (s *oauthService) Authorize(userID uint, clientID, redirectURI, state, scop
 
 	ctx := context.Background()
 	key := fmt.Sprintf("oauth:auth_code:%s", code)
-	if err := s.redis.Set(ctx, key, string(codeDataJSON), 5*time.Minute).Err(); err != nil {
+	if err := s.redis.Set(ctx, key, string(codeDataJSON), 2*time.Minute).Err(); err != nil {
 		zap.L().Error("Failed to store authorization code", zap.Error(err))
 		return "", apperrors.ErrInternalServer
 	}
@@ -288,6 +287,7 @@ func (s *oauthService) Token(clientID, clientSecret, code, redirectURI, codeVeri
 	}
 	if err := s.tokenRepo.Create(oauthToken); err != nil {
 		zap.L().Error("Failed to store OAuth token", zap.Error(err))
+		return "", "", apperrors.ErrInternalServer
 	}
 
 	s.auditLogger.Log(&dto.AuditContext{UserID: user.ID}, "oauth_token", "oauth", map[string]interface{}{
@@ -295,27 +295,6 @@ func (s *oauthService) Token(clientID, clientSecret, code, redirectURI, codeVeri
 	})
 
 	return accessToken, "", nil
-}
-
-func (s *oauthService) Userinfo(accessToken string) (*repository.User, error) {
-	claims, err := utils.ParseToken(accessToken)
-	if err != nil {
-		return nil, apperrors.ErrInvalidAccessToken
-	}
-
-	if blacklisted, _ := s.blacklistMgr.IsBlacklisted(claims.JTI); blacklisted {
-		return nil, apperrors.ErrInvalidAccessToken
-	}
-
-	if revoked, _ := s.blacklistMgr.IsUserRevoked(claims.UserID); revoked {
-		return nil, apperrors.ErrInvalidAccessToken
-	}
-
-	user, err := s.userRepo.FindByID(claims.UserID)
-	if err != nil {
-		return nil, apperrors.ErrUserNotFound
-	}
-	return user, nil
 }
 
 // UserinfoByID 通过已验证的 userID 获取用户信息（中间件已校验 token 有效性）
@@ -481,11 +460,10 @@ func validateRedirectURIIsPublic(rawURI string) error {
 }
 
 // checkIPNotInternal 检查 IP 是否为内部/私有地址
-func checkIPNotInternal(ip net.IP, host string) error {
-	// 标准化为 4 字节或 16 字节形式，覆盖 IPv4-mapped IPv6
-	ip = ip.To4()
+func checkIPNotInternal(originalIP net.IP, host string) error {
+	ip := originalIP.To4()
 	if ip == nil {
-		ip = ip.To16()
+		ip = originalIP.To16()
 	}
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return fmt.Errorf("redirect URI must not point to internal/private IP: %s", host)

@@ -93,7 +93,25 @@ func (m *Manager) GenerateToken(sessionID string) (string, error) {
 	return token, nil
 }
 
-// ValidateToken 验证 CSRF token
+// validateAndDeleteScript 原子性验证并删除 CSRF token（Lua 脚本避免 GET+DEL 之间的竞态）
+var validateAndDeleteScript = redis.NewScript(`
+	local key = KEYS[1]
+	local expected_session = ARGV[1]
+
+	local stored_session = redis.call("GET", key)
+	if stored_session == false then
+		return 0
+	end
+
+	if stored_session ~= expected_session then
+		return -1
+	end
+
+	redis.call("DEL", key)
+	return 1
+`)
+
+// ValidateToken 验证 CSRF token（原子性：验证通过后立即销毁）
 func (m *Manager) ValidateToken(token, sessionID string) error {
 	if token == "" {
 		return ErrInvalidToken
@@ -108,19 +126,21 @@ func (m *Manager) ValidateToken(token, sessionID string) error {
 
 	key := fmt.Sprintf("%s%s", csrfTokenPrefix, tokenHash(token))
 
-	storedSession, err := m.redis.Get(ctx, key).Result()
+	result, err := validateAndDeleteScript.Run(ctx, m.redis, []string{key}, sessionID).Int64()
 	if err != nil {
-		if err == redis.Nil {
-			return ErrInvalidToken
-		}
 		return err
 	}
 
-	if storedSession != sessionID {
+	switch result {
+	case 1:
+		return nil
+	case 0:
+		return ErrInvalidToken
+	case -1:
+		return ErrInvalidToken
+	default:
 		return ErrInvalidToken
 	}
-
-	return nil
 }
 
 // RevokeToken 撤销 token

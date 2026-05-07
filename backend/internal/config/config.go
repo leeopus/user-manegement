@@ -40,9 +40,7 @@ type RedisConfig struct {
 }
 
 type JWTConfig struct {
-	Secret            string        `mapstructure:"secret"`
-	Expiration        time.Duration `mapstructure:"expiration"`
-	RefreshExpiration time.Duration `mapstructure:"refresh_expiration"`
+	Secret string `mapstructure:"secret"`
 }
 
 type CORSConfig struct {
@@ -70,10 +68,9 @@ var flatToNested = map[string]string{
 	"DATABASE_URL":              "database.url",
 	"REDIS_URL":                 "redis.url",
 	"JWT_SECRET":                "jwt.secret",
-	"JWT_EXPIRATION":            "jwt.expiration",
-	"REFRESH_TOKEN_EXPIRATION":  "jwt.refresh_expiration",
 	"SERVER_PORT":               "server.port",
 	"SERVER_GIN_MODE":           "server.gin_mode",
+	"GIN_MODE":                  "server.gin_mode",
 	"FRONTEND_URL":              "frontend.url",
 	"CORS_ORIGINS":              "cors.origins",
 	"COOKIE_SECURE":             "security.cookie_secure",
@@ -95,8 +92,6 @@ func Load(configPath string) error {
 	// Set defaults
 	viper.SetDefault("server.port", "8080")
 	viper.SetDefault("server.gin_mode", "debug")
-	viper.SetDefault("jwt.expiration", "1h")
-	viper.SetDefault("jwt.refresh_expiration", "720h")
 	viper.SetDefault("cors.origins", []string{"http://localhost:3000"})
 	viper.SetDefault("redis.url", "redis://localhost:6379/0")
 	viper.SetDefault("frontend.url", "http://localhost:3000")
@@ -130,6 +125,7 @@ func Load(configPath string) error {
 	viper.BindEnv("redis.url", "REDIS_URL")
 	viper.BindEnv("jwt.secret", "JWT_SECRET")
 	viper.BindEnv("server.port", "SERVER_PORT")
+	viper.BindEnv("server.gin_mode", "GIN_MODE")
 	viper.BindEnv("frontend.url", "FRONTEND_URL")
 	viper.BindEnv("security.cookie_secure", "COOKIE_SECURE")
 	viper.BindEnv("security.max_failed_attempts", "MAX_FAILED_ATTEMPTS")
@@ -171,6 +167,9 @@ func Load(configPath string) error {
 	}
 	if sec.MaxSessionsPerUser < 1 || sec.MaxSessionsPerUser > 20 {
 		return fmt.Errorf("MAX_SESSIONS_PER_USER must be between 1 and 20, got %d", sec.MaxSessionsPerUser)
+	}
+	if sec.AccessTokenMaxTTLMin < 1 || sec.AccessTokenMaxTTLMin > 1440 {
+		return fmt.Errorf("ACCESS_TOKEN_MAX_TTL_MIN must be between 1 and 1440, got %d", sec.AccessTokenMaxTTLMin)
 	}
 	if sec.RefreshTokenTTLDays < 1 || sec.RefreshTokenTTLDays > 90 {
 		return fmt.Errorf("REFRESH_TOKEN_TTL_DAYS must be between 1 and 90, got %d", sec.RefreshTokenTTLDays)
@@ -216,6 +215,7 @@ func (c *Config) GetIntEnv(key string, defaultVal int) int {
 // wellKnownWeakSecrets 常见的弱 JWT Secret 占位符
 var wellKnownWeakSecrets = []string{
 	"your-super-secret-jwt-key-change-in-production",
+	"replace_me_generate_with_openssl_rand_hex_32",
 	"secret", "jwt-secret", "my-secret", "change-me",
 	"super-secret", "jwt_secret", "your-secret-key",
 	"example-secret", "test-secret", "default-secret",

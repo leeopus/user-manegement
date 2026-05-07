@@ -123,6 +123,20 @@ export function validatePassword(password: string, _username?: string): { streng
     return { strength: PasswordStrength.Weak, error: "validation.password.sameChars" }
   }
 
+  // 强制字符类型要求（与后端 DefaultPasswordPolicy 一致）
+  if (!hasUpper) {
+    return { strength: PasswordStrength.Weak, error: "validation.password.requireUpper" }
+  }
+  if (!hasLower) {
+    return { strength: PasswordStrength.Weak, error: "validation.password.requireLower" }
+  }
+  if (!hasNumber) {
+    return { strength: PasswordStrength.Weak, error: "validation.password.requireNumber" }
+  }
+  if (_username && password.toLowerCase().includes(_username.toLowerCase())) {
+    return { strength: PasswordStrength.Weak, error: "validation.password.containsUsername" }
+  }
+
   let strength: PasswordStrength
   if (score <= 2) strength = PasswordStrength.Weak
   else if (score <= 4) strength = PasswordStrength.Fair

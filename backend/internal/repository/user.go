@@ -143,7 +143,7 @@ func (r *userRepository) FindByUsername(username string) (*User, error) {
 }
 
 func (r *userRepository) Update(user *User) error {
-	return r.db.Model(user).Select("username", "email", "password_hash", "status", "avatar", "password_changed_at").Updates(user).Error
+	return r.db.Model(user).Select("username", "email", "status", "avatar", "password_changed_at").Updates(user).Error
 }
 
 func (r *userRepository) UpdateStatus(id uint, status string) error {
@@ -193,7 +193,7 @@ func (r *userRepository) UpdateLastLogin(id uint, ip string) error {
 
 func (r *userRepository) HardDelete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 清理所有关联数据，避免孤立记录
+		// 清理关联数据（不含审计日志）
 		tables := []string{
 			"user_roles",
 			"password_histories",
@@ -205,6 +205,15 @@ func (r *userRepository) HardDelete(id uint) error {
 				return err
 			}
 		}
+
+		// 匿名化审计日志：保留操作记录和 action/resource 用于合规审计，仅清除 PII 字段
+		if err := tx.Exec(
+			"UPDATE audit_logs SET ip_address = '', user_agent = '', request_id = '' WHERE user_id = ?",
+			id,
+		).Error; err != nil {
+			return err
+		}
+
 		return tx.Unscoped().Delete(&User{}, id).Error
 	})
 }

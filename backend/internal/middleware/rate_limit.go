@@ -21,11 +21,17 @@ type RateLimitConfig struct {
 
 // RateLimiter 限流器
 type RateLimiter struct {
-	redis *redis.Client
+	redis      *redis.Client
+	failClosed bool // true 时 Redis 不可用则拒绝请求
 }
 
 func NewRateLimiter(redisClient *redis.Client) *RateLimiter {
 	return &RateLimiter{redis: redisClient}
+}
+
+// NewFailClosedRateLimiter 创建对安全关键端点的限流器，Redis 不可用时拒绝请求
+func NewFailClosedRateLimiter(redisClient *redis.Client) *RateLimiter {
+	return &RateLimiter{redis: redisClient, failClosed: true}
 }
 
 // slidingWindowScript 滑动窗口限流 Lua 脚本
@@ -63,7 +69,26 @@ var slidingWindowScript = redis.NewScript(`
 func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rl.redis == nil {
-			// Redis 不可用时记录警告但放行请求，避免自我 DoS
+			if rl.failClosed {
+				// 安全关键端点：Redis 不可用时拒绝请求，防止暴力破解
+				zap.L().Warn("Rate limiter unavailable (Redis not connected), rejecting request (fail-closed)",
+					zap.String("path", c.FullPath()),
+					zap.String("client_ip", c.ClientIP()),
+				)
+				c.JSON(503, gin.H{
+					"success": false,
+					"error": gin.H{
+						"code":    "RATE_LIMIT_UNAVAILABLE",
+						"message": "RATE_LIMIT_UNAVAILABLE",
+						"details": gin.H{
+							"reason": "security service temporarily unavailable, please try again later",
+						},
+					},
+				})
+				c.Abort()
+				return
+			}
+			// 非安全关键端点：放行请求，避免自我 DoS
 			zap.L().Warn("Rate limiter unavailable (Redis not connected), skipping rate limit",
 				zap.String("path", c.FullPath()),
 				zap.String("client_ip", c.ClientIP()),
@@ -158,9 +183,9 @@ func (rl *RateLimiter) RateLimit(config RateLimitConfig) gin.HandlerFunc {
 	}
 }
 
-// RegisterRateLimit 注册专用限流
+// RegisterRateLimit 注册专用限流（fail-closed：Redis 不可用时拒绝请求）
 func RegisterRateLimit(redisClient *redis.Client) gin.HandlerFunc {
-	rl := NewRateLimiter(redisClient)
+	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
 		MaxRequests:   10,
 		Window:        10 * time.Minute,
@@ -168,9 +193,9 @@ func RegisterRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
-// LoginRateLimit 登录专用限流（更严格）
+// LoginRateLimit 登录专用限流（更严格，fail-closed）
 func LoginRateLimit(redisClient *redis.Client) gin.HandlerFunc {
-	rl := NewRateLimiter(redisClient)
+	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
 		MaxRequests:   10,
 		Window:        10 * time.Minute,
@@ -188,9 +213,9 @@ func APIRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
-// OAuthTokenRateLimit OAuth token 端点专用限流（防止暴力破解 authorization code / client secret）
+// OAuthTokenRateLimit OAuth token 端点专用限流（防止暴力破解 authorization code / client secret，fail-closed）
 func OAuthTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
-	rl := NewRateLimiter(redisClient)
+	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
 		MaxRequests:   20,
 		Window:        1 * time.Minute,
@@ -198,9 +223,9 @@ func OAuthTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
-// PasswordResetRateLimit 密码重置端点专用限流（防止邮件轰炸和邮箱枚举）
+// PasswordResetRateLimit 密码重置端点专用限流（防止邮件轰炸和邮箱枚举，fail-closed）
 func PasswordResetRateLimit(redisClient *redis.Client) gin.HandlerFunc {
-	rl := NewRateLimiter(redisClient)
+	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
 		MaxRequests:   3,
 		Window:        1 * time.Hour,
@@ -208,9 +233,9 @@ func PasswordResetRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
-// RefreshRateLimit token 刷新端点专用限流
+// RefreshRateLimit token 刷新端点专用限流（fail-closed：防止 token 被盗后无限重试）
 func RefreshRateLimit(redisClient *redis.Client) gin.HandlerFunc {
-	rl := NewRateLimiter(redisClient)
+	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
 		MaxRequests:   30,
 		Window:        15 * time.Minute,
@@ -228,9 +253,9 @@ func CSRFTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	})
 }
 
-// PasswordChangeRateLimit 密码修改端点专用限流（防止 session 劫持后暴力猜密码）
+// PasswordChangeRateLimit 密码修改端点专用限流（防止 session 劫持后暴力猜密码，fail-closed）
 func PasswordChangeRateLimit(redisClient *redis.Client) gin.HandlerFunc {
-	rl := NewRateLimiter(redisClient)
+	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
 		MaxRequests:   5,
 		Window:        15 * time.Minute,
@@ -239,7 +264,7 @@ func PasswordChangeRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 }
 
 // GetRemainingAttempts 获取剩余尝试次数
-func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string, maxRequests int) (int, error) {
+func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string, maxRequests int, window time.Duration) (int, error) {
 	if rl.redis == nil {
 		return maxRequests, nil
 	}
@@ -247,8 +272,20 @@ func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string, maxRequests i
 	ctx := context.Background()
 	key := fmt.Sprintf("rate_limit:%s:%s", path, clientIP)
 
-	// 滑动窗口：统计当前窗口内的请求数
-	count, err := rl.redis.ZCard(ctx, key).Result()
+	// 使用 Lua 脚本原子清理+计数，与 RateLimit 逻辑一致
+	var getRemainingScript = redis.NewScript(`
+		local key = KEYS[1]
+		local now = tonumber(ARGV[1])
+		local window_ms = tonumber(ARGV[2])
+
+		redis.call("ZREMRANGEBYSCORE", key, "-inf", tostring(now - window_ms))
+		return redis.call("ZCARD", key)
+	`)
+
+	now := time.Now().UnixMilli()
+	windowMS := window.Milliseconds()
+
+	count, err := getRemainingScript.Run(ctx, rl.redis, []string{key}, now, windowMS).Int64()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return maxRequests, nil

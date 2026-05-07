@@ -90,6 +90,17 @@ func ToUserResponseList(users []repository.User) []UserResponse {
 	return result
 }
 
+// ToMaskedUserResponseList 批量转换并遮蔽邮箱（用于用户列表等批量查询场景）
+func ToMaskedUserResponseList(users []repository.User) []UserResponse {
+	result := make([]UserResponse, len(users))
+	for i := range users {
+		resp := ToUserResponse(&users[i])
+		resp.Email = MaskEmail(resp.Email)
+		result[i] = resp
+	}
+	return result
+}
+
 // ToUserWithRolesResponseList 批量转换（带角色）
 func ToUserWithRolesResponseList(users []repository.User) []UserWithRolesResponse {
 	result := make([]UserWithRolesResponse, len(users))
@@ -101,14 +112,10 @@ func ToUserWithRolesResponseList(users []repository.User) []UserWithRolesRespons
 
 // ToAuditLogResponse 将 AuditLog 模型转换为公开响应（脱敏 details 中的邮箱等敏感字段）
 func ToAuditLogResponse(log *repository.AuditLog) AuditLogResponse {
-	username := ""
-	if log.User.ID > 0 {
-		username = log.User.Username
-	}
 	return AuditLogResponse{
 		ID:         log.ID,
 		UserID:     log.UserID,
-		Username:   username,
+		Username:   log.Username,
 		Action:     log.Action,
 		Resource:   log.Resource,
 		ResourceID: log.ResourceID,
@@ -119,9 +126,6 @@ func ToAuditLogResponse(log *repository.AuditLog) AuditLogResponse {
 		CreatedAt:  log.CreatedAt,
 	}
 }
-
-// sensitiveKeyPatterns 匹配 details 中需要脱敏的 key 模式
-var sensitiveKeyPatterns = []string{"email", "target_email", "ip", "last_login_ip"}
 
 // maskSensitiveDetails 对 details JSON 中的邮箱、IP 等敏感字段做脱敏
 func maskSensitiveDetails(details string) string {
@@ -139,7 +143,7 @@ func maskSensitiveDetails(details string) string {
 		}
 		lowerKey := strings.ToLower(key)
 		if containsAnyPattern(lowerKey, "email") && strings.Contains(s, "@") {
-			m[key] = maskEmail(s)
+			m[key] = MaskEmail(s)
 		} else if containsAnyPattern(lowerKey, "ip") && isIPv4(s) {
 			m[key] = maskIP(s)
 		}
@@ -181,8 +185,8 @@ func maskIP(ip string) string {
 	return ip
 }
 
-// maskEmail 将邮箱脱敏为 a***@domain.com 格式
-func maskEmail(email string) string {
+// MaskEmail 将邮箱脱敏为 a***@domain.com 格式
+func MaskEmail(email string) string {
 	at := strings.Index(email, "@")
 	if at <= 0 {
 		return email

@@ -104,7 +104,7 @@ func (h *userHandler) ListUsers(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"users":     dto.ToUserResponseList(users),
+		"users":     dto.ToMaskedUserResponseList(users),
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,

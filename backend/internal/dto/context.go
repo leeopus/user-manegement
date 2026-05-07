@@ -72,7 +72,7 @@ func SessionFingerprint(c *gin.Context) string {
 }
 
 // fallbackSessionFingerprint 仅在随机数生成失败时使用
-func fallbackSessionFingerprint(c *gin.Context) string {
+func fallbackSessionFingerprint(_ *gin.Context) string {
 	// crypto/rand 失败极为罕见，拒绝请求而非降级到 IP（防止 NAT 环境下 CSRF 被绕过）
 	return ""
 }

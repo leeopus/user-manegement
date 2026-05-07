@@ -18,6 +18,7 @@ type AuditLog struct {
 	UserAgent  string `gorm:"size:500"`
 	RequestID  string `gorm:"size:64;index:idx_audit_request_id"`
 	User       User   `gorm:"foreignKey:UserID"`
+	Username   string `gorm:"-"` // 非持久化字段，由 JOIN 填充，避免 N+1 查询
 }
 
 type AuditLogFilters struct {
@@ -89,7 +90,9 @@ func (r *auditLogRepository) ListFiltered(offset, limit int, filters AuditLogFil
 		return nil, 0, err
 	}
 
-	err := query.Preload("User").Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	err := query.Select("audit_logs.*, COALESCE(users.username, '') as username").
+		Joins("LEFT JOIN users ON users.id = audit_logs.user_id").
+		Order("audit_logs.created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
 	return logs, total, err
 }
 
