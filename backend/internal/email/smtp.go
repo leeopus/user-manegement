@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/smtp"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -92,6 +93,13 @@ func (s *smtpEmailService) SendPasswordChangedNotification(email string) error {
 }
 
 func (s *smtpEmailService) sendEmail(to, subject, body string) error {
+	if strings.ContainsAny(to, "\r\n") {
+		return fmt.Errorf("invalid characters in email address")
+	}
+	if strings.ContainsAny(subject, "\r\n") {
+		return fmt.Errorf("invalid characters in email subject")
+	}
+
 	// 构建邮件内容
 	message := fmt.Sprintf("From: %s <%s>\r\n", s.config.FromName, s.config.From)
 	message += fmt.Sprintf("To: %s\r\n", to)

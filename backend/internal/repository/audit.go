@@ -114,6 +114,6 @@ type RolePermission struct {
 
 func (r *auditLogRepository) CleanupOlderThan(retentionDays int) (int64, error) {
 	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	result := r.db.Where("created_at < ?", cutoff).Delete(&AuditLog{})
+	result := r.db.Unscoped().Where("created_at < ?", cutoff).Delete(&AuditLog{})
 	return result.RowsAffected, result.Error
 }

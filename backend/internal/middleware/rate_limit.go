@@ -236,12 +236,12 @@ func OAuthTokenRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 }
 
 // PasswordResetRateLimit 密码重置端点专用限流（防止邮件轰炸和邮箱枚举，fail-closed）
-func PasswordResetRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+func PasswordResetRateLimit(redisClient *redis.Client, maxRequests int, blockDuration time.Duration) gin.HandlerFunc {
 	rl := NewFailClosedRateLimiter(redisClient)
 	return rl.RateLimit(RateLimitConfig{
-		MaxRequests:   3,
+		MaxRequests:   maxRequests,
 		Window:        1 * time.Hour,
-		BlockDuration: 24 * time.Hour,
+		BlockDuration: blockDuration,
 	})
 }
 

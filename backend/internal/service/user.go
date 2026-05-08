@@ -138,6 +138,7 @@ func (s *userService) UpdateUser(id uint, username, email string, currentUserID 
 	}
 
 	var user *repository.User
+	emailChanged := false
 	updateErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
 		var err error
 		user, err = s.userRepo.FindByIDWithTx(tx, id)
@@ -155,11 +156,15 @@ func (s *userService) UpdateUser(id uint, username, email string, currentUserID 
 			if existing, _ := s.userRepo.FindByEmailWithTx(tx, email); existing != nil {
 				return apperrors.ErrEmailAlreadyExists
 			}
+			emailChanged = true
 		}
 
 		user.Username = username
 		user.Email = email
-		return s.userRepo.UpdateWithTx(tx, user)
+		if emailChanged {
+			user.EmailVerifiedAt = nil
+		}
+		return s.userRepo.UpdateProfileWithTx(tx, user)
 	})
 
 	if updateErr != nil {
@@ -167,6 +172,18 @@ func (s *userService) UpdateUser(id uint, username, email string, currentUserID 
 			return nil, appErr
 		}
 		return nil, apperrors.ErrInternalServer
+	}
+
+	// 邮箱变更后吊销所有会话，强制重新登录并验证新邮箱
+	if emailChanged {
+		if err := s.refreshTokenMgr.RevokeAll(id); err != nil {
+			zap.L().Error("CRITICAL: failed to revoke refresh tokens after email change",
+				zap.Uint("user_id", id), zap.Error(err))
+		}
+		if err := s.blacklistMgr.RevokeAllUserTokens(id); err != nil {
+			zap.L().Error("CRITICAL: failed to blacklist user tokens after email change",
+				zap.Uint("user_id", id), zap.Error(err))
+		}
 	}
 
 	s.auditLogger.Log(&dto.AuditContext{
@@ -177,6 +194,7 @@ func (s *userService) UpdateUser(id uint, username, email string, currentUserID 
 		"target_id":       id,
 		"target_username": username,
 		"target_email":    email,
+		"email_changed":   emailChanged,
 	})
 
 	return user, nil

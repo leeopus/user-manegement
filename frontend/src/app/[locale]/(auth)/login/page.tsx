@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useCallback } from "react"
 import { useRouter } from "@/i18n/routing"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
@@ -10,6 +10,9 @@ import { useAuth } from "@/lib/auth-provider"
 import { useErrorHandler } from "@/lib/use-error-handler"
 import { Link } from "@/i18n/routing"
 import { Mail, Lock, Eye, EyeOff } from "lucide-react"
+
+const MAX_LOGIN_ATTEMPTS = 5
+const BASE_DELAY_MS = 1000
 
 export default function LoginPage() {
   const t = useTranslations('auth')
@@ -23,17 +26,51 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [showPassword, setShowPassword] = useState(false)
+  const [retryAfter, setRetryAfter] = useState(0)
+
+  const failCountRef = useRef(0)
+  const cooldownRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const getBackoffMs = useCallback((failCount: number) => {
+    return Math.min(BASE_DELAY_MS * Math.pow(2, failCount - 1), 30000)
+  }, [])
+
+  const startCooldown = useCallback((ms: number) => {
+    setRetryAfter(Math.ceil(ms / 1000))
+    const interval = setInterval(() => {
+      setRetryAfter(prev => {
+        if (prev <= 1) {
+          clearInterval(interval)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    cooldownRef.current = setTimeout(() => {
+      cooldownRef.current = null
+    }, ms)
+  }, [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (cooldownRef.current) return
+
     setLoading(true)
     setError("")
 
     try {
       await login(email, password, rememberMe)
+      failCountRef.current = 0
       router.push("/profile")
     } catch (err) {
+      failCountRef.current += 1
       setError(getError(err))
+      if (failCountRef.current >= MAX_LOGIN_ATTEMPTS) {
+        const backoff = getBackoffMs(failCountRef.current)
+        setError(t('tooManyAttempts'))
+        startCooldown(backoff)
+      }
     } finally {
       setLoading(false)
     }
@@ -135,9 +172,9 @@ export default function LoginPage() {
             <Button
               type="submit"
               className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors"
-              disabled={loading}
+              disabled={loading || retryAfter > 0}
             >
-              {loading ? t('signingIn') : t('signIn')}
+              {loading ? t('signingIn') : retryAfter > 0 ? `${t('signIn')} (${retryAfter}s)` : t('signIn')}
             </Button>
 
             {/* Sign Up Link */}

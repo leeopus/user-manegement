@@ -13,8 +13,8 @@ const (
 	RoleUser  = "user"
 
 	// PostgreSQL constraint names (must match DB schema)
-	ConstraintUsersUsernameKey = "users_username_key"
-	ConstraintUsersEmailKey    = "users_email_key"
+	ConstraintUsersUsernameKey = "idx_users_username"
+	ConstraintUsersEmailKey    = "idx_users_email"
 
 	// Permission codes (resource:action format)
 	PermUserRead       = "users:read"

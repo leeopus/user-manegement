@@ -103,6 +103,13 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 
 	username := utils.GenerateUsernameFromEmail(email)
 
+	// 用生成的用户名重新校验密码（检查是否包含用户名）
+	if _, err := utils.ValidatePassword(password, username); err != nil {
+		return nil, apperrors.ErrPasswordTooWeak.WithDetails(map[string]interface{}{
+			"reason": err.Error(),
+		})
+	}
+
 	// 两条路径统一执行 bcrypt，消除时序差异
 	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
@@ -110,11 +117,12 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 		return nil, apperrors.ErrInternalServer
 	}
 
-	// 两条路径统一执行事务内 INSERT：
-	// - 邮箱不存在：INSERT 成功，用户创建
-	// - 邮箱已存在：INSERT 触发唯一约束冲突，事务回滚
-	// 两条路径执行的操作集完全相同，消除时序侧信道
-	silent := false
+	// 事务内 INSERT：邮箱不存在则创建用户，邮箱已存在则返回明确错误
+	//
+	// 使用 SAVEPOINT 保护每次 INSERT 尝试：PostgreSQL 在语句失败后将整个事务标记为
+	// aborted，后续操作（包括 COMMIT）都会被拒绝。通过 SAVEPOINT + ROLLBACK TO
+	// 可以恢复事务到正常状态，使后续操作或最终 COMMIT 正常执行。
+	const spName = "register_attempt"
 	var user *repository.User
 	createErr := s.userRepo.Transaction(func(tx *gorm.DB) error {
 		currentUsername := username
@@ -129,7 +137,9 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 				PasswordChangedAt: &now,
 			}
 
+			tx.SavePoint(spName)
 			if err := tx.Create(candidate).Error; err != nil {
+				tx.RollbackTo(spName)
 				if isUniqueViolation(err) {
 					if isUsernameConstraint(err) {
 						suffix, sErr := utils.RandomSuffix(6)
@@ -139,9 +149,8 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 						currentUsername = username + suffix
 						continue
 					}
-					// email 唯一约束冲突 → 邮箱已存在，静默返回成功
-					silent = true
-					return nil
+					// email 唯一约束冲突 → 邮箱已存在，返回明确错误
+					return apperrors.ErrEmailAlreadyExists
 				}
 				return apperrors.ErrInternalServer
 			}
@@ -158,13 +167,6 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 		}
 		zap.L().Error("Failed to create user", zap.Error(createErr))
 		return nil, apperrors.ErrInternalServer
-	}
-
-	if silent {
-		// 邮箱已存在，返回静默成功防止枚举
-		return nil, apperrors.ErrRegisterSilent.WithDetails(map[string]interface{}{
-			"hint": "if_this_email_is_available_you_will_receive_confirmation",
-		})
 	}
 
 	s.auditLogger.Log(&dto.AuditContext{

@@ -138,7 +138,12 @@ func main() {
 	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogger, rbacCache)
 	permissionService := service.NewPermissionService(permissionRepo, auditLogger, rbacCache)
 	oauthService := service.NewOAuthService(oauthAppRepo, oauthTokenRepo, userRepo, auditLogger, redis.Client, blacklistMgr)
-	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr, redis.Client)
+	// 密码重置速率限制配置
+	pwResetCooldown := time.Duration(cfg.GetIntEnv("PW_RESET_EMAIL_COOLDOWN_SEC", 60)) * time.Second
+	pwResetMaxPerHour := cfg.GetIntEnv("PW_RESET_IP_MAX_PER_HOUR", 3)
+	pwResetBlockHours := time.Duration(cfg.GetIntEnv("PW_RESET_IP_BLOCK_HOURS", 24)) * time.Hour
+
+	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr, redis.Client, pwResetCooldown)
 
 	rbacCfg := middleware.RBACConfig{
 		UserRepo:     userRepo,
@@ -210,9 +215,9 @@ func main() {
 			auth.PUT("/password/change", middleware.Auth(authCfg), middleware.PasswordChangeRateLimit(redis.Client), authHandler.ChangePassword)
 		}
 
-		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.RequestReset)
+		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client, pwResetMaxPerHour, pwResetBlockHours), passwordHandler.RequestReset)
 		v1.POST("/auth/password/reset", middleware.CSRF(redis.Client), passwordHandler.ResetPassword)
-		v1.POST("/auth/password/validate-token", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client), passwordHandler.ValidateToken)
+		v1.POST("/auth/password/validate-token", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client, pwResetMaxPerHour, pwResetBlockHours), passwordHandler.ValidateToken)
 
 		users := v1.Group("/users")
 		users.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermUserRead))

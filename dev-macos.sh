@@ -135,6 +135,7 @@ done
 # 启动前端（前台，支持热重载）
 echo "🎨 启动前端服务..."
 cd "$SCRIPT_DIR/frontend"
+export BACKEND_URL=http://localhost:8080
 
 # 检查 node_modules
 if [[ ! -d "node_modules" ]]; then

@@ -99,6 +99,10 @@ func seedRole(db *gorm.DB, code, name, description string) *repository.Role {
 func seedAdminUser(db *gorm.DB, userRepo repository.UserRepository, roleRepo repository.RoleRepository) {
 	adminEmail := os.Getenv("INITIAL_ADMIN_EMAIL")
 	adminPassword := os.Getenv("INITIAL_ADMIN_PASSWORD")
+	adminUsername := os.Getenv("INITIAL_ADMIN_USERNAME")
+	if adminUsername == "" {
+		adminUsername = "system_admin"
+	}
 
 	if adminEmail == "" || adminPassword == "" {
 		zap.L().Info("Seed: INITIAL_ADMIN_EMAIL/PASSWORD not set, skipping admin user creation")
@@ -106,7 +110,7 @@ func seedAdminUser(db *gorm.DB, userRepo repository.UserRepository, roleRepo rep
 	}
 
 	// 校验管理员密码强度，防止弱密码
-	if _, err := utils.ValidatePassword(adminPassword, "admin"); err != nil {
+	if _, err := utils.ValidatePassword(adminPassword, adminUsername); err != nil {
 		zap.L().Error("Seed: INITIAL_ADMIN_PASSWORD does not meet strength requirements",
 			zap.Error(err),
 			zap.String("hint", "use at least 8 chars with letters and numbers"),
@@ -140,7 +144,7 @@ func seedAdminUser(db *gorm.DB, userRepo repository.UserRepository, roleRepo rep
 
 	now := time.Now()
 	adminUser := &repository.User{
-		Username:          "admin",
+		Username:          adminUsername,
 		Email:             adminEmail,
 		PasswordHash:      passwordHash,
 		Status:            StatusActive,

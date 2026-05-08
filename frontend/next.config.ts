@@ -7,10 +7,14 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: process.env.DEV_ORIGINS ? process.env.DEV_ORIGINS.split(',') : [],
   output: "standalone",
   async rewrites() {
+    const backendUrl = process.env.BACKEND_URL;
+    if (!backendUrl) {
+      throw new Error("BACKEND_URL environment variable is required");
+    }
     return [
       {
         source: "/api/:path*",
-        destination: `${process.env.BACKEND_URL || "http://localhost:8080"}/api/:path*`,
+        destination: `${backendUrl}/api/:path*`,
       },
     ];
   },

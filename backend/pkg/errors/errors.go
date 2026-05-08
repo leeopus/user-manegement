@@ -74,13 +74,6 @@ var (
 		http.StatusBadRequest,
 	)
 
-	// ErrRegisterSilent 注册静默成功（用于防止邮箱枚举：邮箱已存在时仍返回成功）
-	ErrRegisterSilent = New(
-		"AUTH_REGISTER_SILENT_201",
-		"AUTH_REGISTER_SUCCESS",
-		http.StatusCreated,
-	)
-
 	ErrUsernameAlreadyExists = New(
 		"AUTH_REGISTER_USERNAME_EXISTS_400",
 		"AUTH_REGISTER_USERNAME_EXISTS",

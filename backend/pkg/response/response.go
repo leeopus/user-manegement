@@ -122,10 +122,13 @@ func ValidationError(c *gin.Context, message string) {
 	})
 }
 
-// sanitizeValidationMessage 清理 Gin binding 错误信息，脱敏内部结构体路径和 Go 类型名
+// sanitizeValidationMessage 清理 Gin binding 错误信息，脱敏内部结构体路径、Go 类型名和用户输入值
 func sanitizeValidationMessage(msg string) string {
-	// 使用简单的字符串处理脱敏 Gin binding 错误
 	msg = stripGoFieldPaths(msg)
+	// 如果不是已知的 Gin 格式化输出，使用通用提示避免泄露原始输入
+	if strings.Contains(msg, "'") && !strings.HasPrefix(msg, "invalid ") && !strings.Contains(msg, "validation failed") {
+		msg = "validation failed"
+	}
 	if len(msg) > 200 {
 		msg = msg[:200]
 	}

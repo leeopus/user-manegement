@@ -38,6 +38,7 @@ type passwordResetService struct {
 	refreshTokenMgr     *auth.RefreshTokenManager
 	blacklistMgr        *auth.TokenBlacklistManager
 	redisClient         *redis.Client
+	emailCooldown       time.Duration
 }
 
 func NewPasswordResetService(
@@ -50,6 +51,7 @@ func NewPasswordResetService(
 	refreshTokenMgr *auth.RefreshTokenManager,
 	blacklistMgr *auth.TokenBlacklistManager,
 	redisClient *redis.Client,
+	emailCooldown time.Duration,
 ) PasswordResetService {
 	return &passwordResetService{
 		userRepo:            userRepo,
@@ -62,6 +64,7 @@ func NewPasswordResetService(
 		refreshTokenMgr:     refreshTokenMgr,
 		blacklistMgr:        blacklistMgr,
 		redisClient:         redisClient,
+		emailCooldown:       emailCooldown,
 	}
 }
 
@@ -78,7 +81,7 @@ func generateSecureToken() (string, error) {
 func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
 	normalizedEmail := strings.ToLower(strings.TrimSpace(emailAddr))
 
-	// 邮箱维度冷却检查：同一邮箱每 60 秒只能请求一次
+	// 邮箱维度冷却检查
 	if s.redisClient != nil {
 		cooldownKey := fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail)
 		ctx := context.Background()
@@ -96,7 +99,7 @@ func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
 		s.tokenRepo.TouchDummy()
 		// 不存在的邮箱也设冷却，保持常量时间
 		if s.redisClient != nil {
-			s.redisClient.Set(context.Background(), fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail), "1", 60*time.Second)
+			s.redisClient.Set(context.Background(), fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail), "1", s.emailCooldown)
 		}
 		return nil
 	}
@@ -130,9 +133,9 @@ func (s *passwordResetService) RequestPasswordReset(emailAddr string) error {
 		"email": emailAddr,
 	})
 
-	// 设置邮箱冷却，60 秒内不可重复请求
+	// 设置邮箱冷却
 	if s.redisClient != nil {
-		s.redisClient.Set(context.Background(), fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail), "1", 60*time.Second)
+		s.redisClient.Set(context.Background(), fmt.Sprintf("pw_reset:cooldown:%s", normalizedEmail), "1", s.emailCooldown)
 	}
 
 	return nil

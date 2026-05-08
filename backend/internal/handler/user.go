@@ -32,14 +32,14 @@ func NewUserHandler(userService service.UserService) UserHandler {
 }
 
 type CreateUserRequest struct {
-	Username string `json:"username" binding:"required"`
-	Email    string `json:"email" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username string `json:"username" binding:"required,min=3,max=50"`
+	Email    string `json:"email" binding:"required,email,max=254"`
+	Password string `json:"password" binding:"required,min=8,max=64"`
 }
 
 type UpdateUserRequest struct {
-	Username string `json:"username" binding:"required"`
-	Email    string `json:"email" binding:"required"`
+	Username string `json:"username" binding:"required,min=3,max=50"`
+	Email    string `json:"email" binding:"required,email,max=254"`
 }
 
 type UpdateStatusRequest struct {

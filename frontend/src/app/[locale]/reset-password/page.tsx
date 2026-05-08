@@ -47,19 +47,14 @@ export default function ResetPasswordPage() {
     }
   }, [password, passwordResult.error])
 
-  // 验证token — 优先从 hash fragment 读取（不泄露到服务器日志/Referrer），兼容 query 参数
+  // 验证token — 仅从 hash fragment 读取（不泄露到服务器日志/Referrer）
   useEffect(() => {
     let resetToken: string | null = null
 
-    // 优先从 hash 中读取 (#token=xxx)
+    // 从 hash 中读取 (#token=xxx)
     const hash = window.location.hash
     if (hash && hash.startsWith('#token=')) {
       resetToken = hash.substring('#token='.length)
-    }
-
-    // 兼容旧的 query 参数方式
-    if (!resetToken) {
-      resetToken = searchParams.get("token")
     }
 
     if (!resetToken) {
@@ -266,22 +261,6 @@ export default function ResetPasswordPage() {
                       <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
                     )}
                     {tv('requirements.length')}
-                  </li>
-                  <li className={`flex items-center ${/[a-z]/.test(password) && /\d/.test(password) ? 'text-green-600' : 'text-blue-600'}`}>
-                    {/[a-z]/.test(password) && /\d/.test(password) ? (
-                      <Check className="h-3 w-3 mr-2" />
-                    ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
-                    )}
-                    {tv('requirements.complexity')}
-                  </li>
-                  <li className={`flex items-center ${passwordResult.strength >= StrengthLevel.Good ? 'text-green-600' : 'text-blue-600'}`}>
-                    {passwordResult.strength >= StrengthLevel.Good ? (
-                      <Check className="h-3 w-3 mr-2" />
-                    ) : (
-                      <div className="h-3 w-3 mr-2 border-2 border-blue-300 rounded-full" />
-                    )}
-                    {tv('passwordStrength')}
                   </li>
                 </ul>
               </div>

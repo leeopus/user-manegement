@@ -66,6 +66,7 @@ type UserRepository interface {
 	Transaction(fn func(tx *gorm.DB) error) error
 	CreateWithTx(tx *gorm.DB, user *User) error
 	UpdateWithTx(tx *gorm.DB, user *User) error
+	UpdateProfileWithTx(tx *gorm.DB, user *User) error
 	FindByIDWithTx(tx *gorm.DB, id uint) (*User, error)
 	FindByEmailWithTx(tx *gorm.DB, email string) (*User, error)
 	FindByUsernameWithTx(tx *gorm.DB, username string) (*User, error)
@@ -236,7 +237,12 @@ func (r *userRepository) CreateWithTx(tx *gorm.DB, user *User) error {
 }
 
 func (r *userRepository) UpdateWithTx(tx *gorm.DB, user *User) error {
-	return tx.Model(user).Select("username", "email", "password_hash", "status", "avatar", "password_changed_at").Updates(user).Error
+	return tx.Model(user).Select("username", "email", "password_hash", "status", "avatar", "password_changed_at", "email_verified_at").Updates(user).Error
+}
+
+// UpdateProfileWithTx 更新用户资料字段，不含 password_hash，防止非密码修改场景意外覆写
+func (r *userRepository) UpdateProfileWithTx(tx *gorm.DB, user *User) error {
+	return tx.Model(user).Select("username", "email", "status", "avatar", "email_verified_at").Updates(user).Error
 }
 
 func (r *userRepository) FindByEmailWithTx(tx *gorm.DB, email string) (*User, error) {

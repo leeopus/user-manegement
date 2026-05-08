@@ -30,10 +30,11 @@ backend/.env.*
 backend/.env.smtp
 backend/.env.docker
 
-# Keep example files
+# Keep example/template files
 !.env.example
 !.env.production.example
 !backend/.env.docker.example
+!backend/.env.template
 
 # IDE
 .vscode/

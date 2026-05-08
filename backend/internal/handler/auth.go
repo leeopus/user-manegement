@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,14 +12,6 @@ import (
 	"github.com/user-system/backend/pkg/response"
 	apperrors "github.com/user-system/backend/pkg/errors"
 )
-
-// isSilentRegisterError 判断是否为防止邮箱枚举的静默成功错误
-func isSilentRegisterError(err error) bool {
-	if appErr, ok := apperrors.IsAppError(err); ok {
-		return appErr.Code == "AUTH_REGISTER_SILENT_201"
-	}
-	return false
-}
 
 type AuthHandler interface {
 	Register(c *gin.Context)
@@ -61,21 +54,19 @@ func (h *authHandler) Register(c *gin.Context) {
 
 	auditCtx := dto.NewAuditContext(c, 0)
 
-	_, err := h.authService.Register(req.Email, req.Password, auditCtx)
+	user, err := h.authService.Register(req.Email, req.Password, auditCtx)
 	if err != nil {
-		if isSilentRegisterError(err) {
-			response.Created(c, gin.H{
-				"message": "registration_processed",
-			})
-			return
-		}
 		response.Error(c, err)
 		return
 	}
 
-	// 统一响应结构，防止邮箱枚举
 	response.Created(c, gin.H{
-		"message": "registration_processed",
+		"message": "registration_successful",
+		"user": gin.H{
+			"id":       user.ID,
+			"username": user.Username,
+			"email":    user.Email,
+		},
 	})
 }
 
@@ -121,6 +112,13 @@ func (h *authHandler) Logout(c *gin.Context) {
 
 	refreshToken, _ := jwt.GetTokenCookie(c, jwt.RefreshTokenCookie)
 	accessToken, _ := jwt.GetTokenCookie(c, jwt.AccessTokenCookie)
+
+	// 回退从 Authorization Header 读取 access token
+	if accessToken == "" {
+		if authHeader := c.GetHeader("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			accessToken = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+	}
 
 	_ = h.authService.Logout(userID, refreshToken, accessToken)
 
