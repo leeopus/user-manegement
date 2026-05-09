@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -402,7 +403,11 @@ func isValidScope(registeredScopes, requestedScope string) bool {
 	for _, s := range strings.Split(registeredScopes, ",") {
 		registered[strings.TrimSpace(s)] = true
 	}
-	for _, s := range strings.Split(requestedScope, ",") {
+	// OAuth 标准用空格分隔，同时兼容逗号分隔
+	requested := strings.FieldsFunc(requestedScope, func(r rune) bool {
+		return r == ' ' || r == ','
+	})
+	for _, s := range requested {
 		if !registered[strings.TrimSpace(s)] {
 			return false
 		}
@@ -422,11 +427,15 @@ func validateRedirectURIIsPublic(rawURI string) error {
 		return fmt.Errorf("redirect URI must have a host")
 	}
 
-	// 拒绝明显的主机名模式
+	// 拒绝明显的主机名模式（开发环境允许 localhost 等本地地址）
 	lowerHost := strings.ToLower(host)
+	isDev := os.Getenv("GIN_MODE") != "release"
 	internalHostnames := []string{"localhost", "0.0.0.0", "::1", "metadata.google.internal", "169.254.169.254"}
 	for _, h := range internalHostnames {
 		if lowerHost == h {
+			if isDev {
+				return nil
+			}
 			return fmt.Errorf("redirect URI must not point to internal address: %s", host)
 		}
 	}

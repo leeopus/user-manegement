@@ -148,6 +148,54 @@ func authenticate(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, user
 	c.Next()
 }
 
+// authenticateOptional attempts authentication from cookie, but does not reject if no token.
+func authenticateOptional(c *gin.Context, blacklistMgr *auth.TokenBlacklistManager, userRepo repository.UserRepository) {
+	tokenString := ""
+
+	authHeader := c.GetHeader("Authorization")
+	if tokenString = extractBearerToken(authHeader); tokenString == "" {
+		token, err := getTokenCookie(c, accessTokenCookie)
+		if err == nil && token != "" {
+			tokenString = token
+		}
+	}
+
+	if tokenString == "" {
+		c.Next()
+		return
+	}
+
+	claims, err := utils.ParseToken(tokenString)
+	if err != nil {
+		c.Next()
+		return
+	}
+
+	if claims.TokenType == "refresh" {
+		c.Next()
+		return
+	}
+
+	if claims.ClientID != "" {
+		c.Next()
+		return
+	}
+
+	if blacklistMgr != nil {
+		status, blacklisted, err := blacklistMgr.CheckTokenStatus(c.Request.Context(), claims.UserID, claims.JTI)
+		if err != nil || status || blacklisted {
+			c.Next()
+			return
+		}
+	}
+
+	c.Set("user_id", claims.UserID)
+	c.Set("username", claims.Username)
+	c.Set("email", claims.Email)
+
+	c.Next()
+}
+
 // AuthConfig 认证中间件配置
 type AuthConfig struct {
 	BlacklistMgr *auth.TokenBlacklistManager
@@ -158,6 +206,13 @@ type AuthConfig struct {
 func Auth(cfg AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authenticate(c, cfg.BlacklistMgr, cfg.UserRepo, tokenSourceAll, restrictionNoOAuth)
+	}
+}
+
+// OptionalAuth attempts authentication but does not reject unauthenticated requests.
+func OptionalAuth(cfg AuthConfig) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authenticateOptional(c, cfg.BlacklistMgr, cfg.UserRepo)
 	}
 }
 

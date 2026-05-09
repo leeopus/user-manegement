@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"net/url"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +14,7 @@ import (
 
 type OAuthHandler interface {
 	Authorize(c *gin.Context)
+	AuthorizePage(c *gin.Context)
 	Token(c *gin.Context)
 	Userinfo(c *gin.Context)
 	ListApplications(c *gin.Context)
@@ -85,6 +88,62 @@ func (h *oauthHandler) Authorize(c *gin.Context) {
 		"code":  code,
 		"state": req.State,
 	})
+}
+
+// AuthorizePage handles browser-based OAuth2 authorization (GET request).
+// If the user is authenticated, generates a code and redirects to callback.
+// If not authenticated, redirects to the login page with return URL.
+func (h *oauthHandler) AuthorizePage(c *gin.Context) {
+	clientID := c.Query("client_id")
+	redirectURI := c.Query("redirect_uri")
+	state := c.Query("state")
+	scope := c.Query("scope")
+
+	if clientID == "" || redirectURI == "" || state == "" {
+		response.ValidationError(c, "client_id, redirect_uri, and state are required")
+		return
+	}
+
+	// Check if user is authenticated
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		// Not logged in — redirect to login page with return URL
+		cfg := config.Get()
+		frontendURL := "http://localhost:3000"
+		if cfg != nil && cfg.Frontend.URL != "" {
+			frontendURL = cfg.Frontend.URL
+		}
+		// Build full backend URL so redirect after login hits the backend, not the frontend
+		scheme := "http"
+		if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+			scheme = "https"
+		}
+		returnURL := fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, c.Request.URL.String())
+		loginURL := fmt.Sprintf("%s/zh/login?redirect=%s", frontendURL, url.QueryEscape(returnURL))
+		c.Redirect(302, loginURL)
+		return
+	}
+
+	userID, ok := userIDVal.(uint)
+	if !ok {
+		response.Unauthorized(c)
+		return
+	}
+
+	// Generate authorization code
+	code, err := h.oauthService.Authorize(userID, clientID, redirectURI, state, scope, "", "", c.ClientIP(), c.GetHeader("User-Agent"))
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+
+	// Redirect back to client callback with code and state
+	callbackURL, _ := url.Parse(redirectURI)
+	q := callbackURL.Query()
+	q.Set("code", code)
+	q.Set("state", state)
+	callbackURL.RawQuery = q.Encode()
+	c.Redirect(302, callbackURL.String())
 }
 
 func (h *oauthHandler) Token(c *gin.Context) {

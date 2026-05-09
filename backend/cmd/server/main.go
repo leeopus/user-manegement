@@ -257,6 +257,7 @@ func main() {
 
 		oauth := v1.Group("/oauth")
 		{
+				oauth.GET("/authorize", middleware.OptionalAuth(authCfg), oauthHandler.AuthorizePage)
 			oauth.POST("/authorize", middleware.Auth(authCfg), middleware.CSRF(redis.Client), oauthHandler.Authorize)
 			oauth.POST("/token", middleware.OAuthTokenRateLimit(redis.Client), oauthHandler.Token)
 			oauth.GET("/userinfo", middleware.OAuthAuth(authCfg), oauthHandler.Userinfo)

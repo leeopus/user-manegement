@@ -25,7 +25,7 @@ type OAuthToken struct {
 	ApplicationID uint   `gorm:"not null;index:idx_oauth_token_app"`
 	UserID        uint   `gorm:"not null;index:idx_oauth_token_user"`
 	AccessToken   string `gorm:"size:64;uniqueIndex;not null"`
-	RefreshToken  string `gorm:"size:64;uniqueIndex"`
+	RefreshToken  *string `gorm:"size:64;uniqueIndex"`
 	ExpiresAt     time.Time `gorm:"index:idx_oauth_token_expires"`
 	Application   OAuthApplication `gorm:"foreignKey:ApplicationID"`
 	User          User             `gorm:"foreignKey:UserID"`

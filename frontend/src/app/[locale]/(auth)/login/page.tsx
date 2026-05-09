@@ -62,7 +62,17 @@ export default function LoginPage() {
     try {
       await login(email, password, rememberMe)
       failCountRef.current = 0
-      router.push("/profile")
+      const params = new URLSearchParams(window.location.search)
+      const redirect = params.get('redirect')
+      if (redirect) {
+        if (redirect.startsWith('http') || redirect.startsWith('/api')) {
+          window.location.href = redirect
+        } else {
+          router.push(redirect)
+        }
+      } else {
+        router.push("/profile")
+      }
     } catch (err) {
       failCountRef.current += 1
       setError(getError(err))

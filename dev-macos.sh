@@ -78,10 +78,36 @@ if [[ ! -f ".env" ]]; then
     echo "   ✅ 已创建 .env 文件，请根据需要修改配置"
 fi
 
-# 停止已存在的后端进程
+# 清理旧进程：杀 PID 文件记录的进程 + 清理端口残留
 echo "🧹 清理旧进程..."
-pkill -f "go run cmd/server/main.go" || true
+cleanup_port() {
+    local port=$1
+    local pids=$(lsof -ti :$port -sTCP:LISTEN 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "   清理端口 :$port 上的残留进程..."
+        echo "$pids" | xargs kill -9 2>/dev/null || true
+    fi
+}
+
+# 先尝试优雅停止 PID 文件记录的进程
+for pidfile in backend/logs/backend.pid; do
+    if [ -f "$pidfile" ]; then
+        pid=$(cat "$pidfile")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$pidfile"
+    fi
+done
+
+# pkill go run 相关进程
+pkill -f "go run cmd/server/main.go" 2>/dev/null || true
+
 sleep 1
+
+# 强制清理端口残留（go run 的子进程可能存活）
+cleanup_port 8080
+cleanup_port 3000
 
 # 启动后端（后台）
 echo "📦 启动后端服务..."
