@@ -42,6 +42,22 @@ func SetTokenCookie(c *gin.Context, name, token string, maxAge time.Duration) {
 	)
 }
 
+// SetSessionTokenCookie 设置 HTTP-only session cookie（MaxAge=0，关闭浏览器即清除）
+func SetSessionTokenCookie(c *gin.Context, name, token string) {
+	isSecure := isSecureRequest(c)
+
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie(
+		name,
+		token,
+		0,
+		"/",
+		"",
+		isSecure,
+		true,
+	)
+}
+
 // GetTokenCookie 获取 cookie 中的 token
 func GetTokenCookie(c *gin.Context, name string) (string, error) {
 	token, err := c.Cookie(name)

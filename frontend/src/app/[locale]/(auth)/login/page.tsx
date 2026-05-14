@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useMemo } from "react"
 import { useRouter } from "@/i18n/routing"
+import { useSearchParams } from "next/navigation"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +11,7 @@ import { useAuth } from "@/lib/auth-provider"
 import { useErrorHandler } from "@/lib/use-error-handler"
 import { Link } from "@/i18n/routing"
 import { Mail, Lock, Eye, EyeOff } from "lucide-react"
+import { OpusBrandLogo } from "@/components/opus-logo"
 
 const MAX_LOGIN_ATTEMPTS = 5
 const BASE_DELAY_MS = 1000
@@ -20,6 +22,8 @@ export default function LoginPage() {
   const { getError } = useErrorHandler()
   const { login } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const redirect = useMemo(() => searchParams.get('redirect') || '', [searchParams])
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [rememberMe, setRememberMe] = useState(false)
@@ -62,8 +66,6 @@ export default function LoginPage() {
     try {
       await login(email, password, rememberMe)
       failCountRef.current = 0
-      const params = new URLSearchParams(window.location.search)
-      const redirect = params.get('redirect')
       if (redirect) {
         if (redirect.startsWith('http') || redirect.startsWith('/api')) {
           window.location.href = redirect
@@ -91,8 +93,10 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo and Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{tc('appName')}</h1>
-          <h2 className="mt-6 text-2xl font-semibold text-gray-900">
+          <div className="flex items-center justify-center mb-4">
+            <OpusBrandLogo size="lg" system="account" />
+          </div>
+          <h2 className="text-xl font-semibold text-gray-900">
             {t('welcomeBack')}
           </h2>
           <p className="mt-2 text-sm text-gray-600">
@@ -191,7 +195,7 @@ export default function LoginPage() {
             <div className="text-center text-sm">
               <span className="text-gray-600">{t('noAccount')}</span>{" "}
               <Link
-                href="/register"
+                href={redirect ? `/register?redirect=${encodeURIComponent(redirect)}` : "/register"}
                 className="font-medium text-blue-600 hover:text-blue-700"
               >
                 {t('register')}

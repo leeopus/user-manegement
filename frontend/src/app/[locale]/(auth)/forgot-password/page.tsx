@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
+import { OpusBrandLogo } from "@/components/opus-logo"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Link } from "@/i18n/routing"
@@ -39,8 +40,10 @@ export default function ForgotPasswordPage() {
       <div className="w-full max-w-md">
         {/* Logo and Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{tc('appName')}</h1>
-          <h2 className="mt-6 text-2xl font-semibold text-gray-900">
+          <div className="flex items-center justify-center mb-4">
+            <OpusBrandLogo size="lg" system="account" />
+          </div>
+          <h2 className="mt-4 text-2xl font-semibold text-gray-900">
             {t('forgotPassword')}
           </h2>
           <p className="mt-2 text-sm text-gray-600">

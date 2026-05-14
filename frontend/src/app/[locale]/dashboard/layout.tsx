@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { LanguageSwitcher } from "@/components/language-switcher"
 import { Link } from "@/i18n/routing"
 import { useAuth, hasPermission } from "@/lib/auth-provider"
+import { OpusSystemLogo } from "@/components/opus-logo"
 
 interface NavItem {
   href: string
@@ -47,7 +48,7 @@ export default function DashboardLayout({
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-xl font-bold">{t('title')}</h1>
+          <OpusSystemLogo system="account" />
           <div className="flex items-center gap-4">
             <LanguageSwitcher />
             <span className="text-sm text-gray-600">

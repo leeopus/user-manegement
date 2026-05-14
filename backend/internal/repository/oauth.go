@@ -12,12 +12,13 @@ import (
 
 type OAuthApplication struct {
 	gorm.Model
-	Name         string       `gorm:"size:100;not null"`
-	ClientID     string       `gorm:"size:100;uniqueIndex;not null"`
-	ClientSecret string       `gorm:"size:255;not null"`
-	RedirectURIs string       `gorm:"type:text;not null"`
-	Scopes       string       `gorm:"type:text;default:read,write"`
-	Tokens       []OAuthToken `gorm:"foreignKey:ApplicationID"`
+	Name                  string       `gorm:"size:100;not null"`
+	ClientID              string       `gorm:"size:100;uniqueIndex;not null"`
+	ClientSecret          string       `gorm:"size:255;not null"`
+	RedirectURIs          string       `gorm:"type:text;not null"`
+	FrontchannelLogoutURI string       `gorm:"size:500"`
+	Scopes                string       `gorm:"type:text;default:read,write"`
+	Tokens                []OAuthToken `gorm:"foreignKey:ApplicationID"`
 }
 
 type OAuthToken struct {
@@ -49,6 +50,7 @@ type OAuthApplicationRepository interface {
 	Update(app *OAuthApplication) error
 	Delete(id uint) error
 	List(offset, limit int) ([]OAuthApplication, int64, error)
+	ListFrontchannelLogoutURIs() []string
 }
 
 type OAuthTokenRepository interface {
@@ -91,7 +93,7 @@ func (r *oauthApplicationRepository) FindByClientID(clientID string) (*OAuthAppl
 }
 
 func (r *oauthApplicationRepository) Update(app *OAuthApplication) error {
-	return r.db.Model(app).Select("name", "redirect_uris").Updates(app).Error
+	return r.db.Model(app).Select("name", "redirect_uris", "frontchannel_logout_uri").Updates(app).Error
 }
 
 func (r *oauthApplicationRepository) Delete(id uint) error {
@@ -113,6 +115,14 @@ func (r *oauthApplicationRepository) List(offset, limit int) ([]OAuthApplication
 
 	err := r.db.Offset(offset).Limit(limit).Find(&apps).Error
 	return apps, total, err
+}
+
+func (r *oauthApplicationRepository) ListFrontchannelLogoutURIs() []string {
+	var uris []string
+	r.db.Model(&OAuthApplication{}).
+		Where("frontchannel_logout_uri != '' AND frontchannel_logout_uri IS NOT NULL").
+		Pluck("frontchannel_logout_uri", &uris)
+	return uris
 }
 
 type oauthTokenRepository struct {

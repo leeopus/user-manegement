@@ -49,12 +49,13 @@ function getAllKeys(obj: unknown, prefix = ''): string[] {
   }
 
   const keys: string[] = []
+  const record = obj as Record<string, unknown>
 
-  for (const key in obj) {
+  for (const key in record) {
     const fullKey = prefix ? `${prefix}.${key}` : key
 
-    if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
-      keys.push(...getAllKeys(obj[key], fullKey))
+    if (typeof record[key] === 'object' && record[key] !== null && !Array.isArray(record[key])) {
+      keys.push(...getAllKeys(record[key], fullKey))
     } else {
       keys.push(fullKey)
     }

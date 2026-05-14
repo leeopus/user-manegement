@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -26,6 +28,10 @@ const (
 
 func getRefreshTokenTTL() time.Duration {
 	return config.Get().GetRefreshTokenTTL()
+}
+
+func getRefreshTokenTTLForRememberMe(rememberMe bool) time.Duration {
+	return config.Get().GetRefreshTokenTTLForRememberMe(rememberMe)
 }
 
 var (
@@ -68,6 +74,7 @@ type authService struct {
 	lockoutManager      *auth.AccountLockoutManager
 	refreshTokenMgr     *auth.RefreshTokenManager
 	blacklistMgr        *auth.TokenBlacklistManager
+	redis               *redis.Client
 }
 
 func NewAuthService(userRepo repository.UserRepository, passwordHistoryRepo repository.PasswordHistoryRepository, auditLogger *AuditLogger, redisClient *redis.Client, blacklistMgr *auth.TokenBlacklistManager, refreshTokenMgr *auth.RefreshTokenManager) AuthService {
@@ -78,6 +85,7 @@ func NewAuthService(userRepo repository.UserRepository, passwordHistoryRepo repo
 		lockoutManager:      auth.NewAccountLockoutManager(redisClient),
 		refreshTokenMgr:     refreshTokenMgr,
 		blacklistMgr:        blacklistMgr,
+		redis:               redisClient,
 	}
 }
 
@@ -252,7 +260,7 @@ func (s *authService) Login(email, password, clientIP, userAgent string, remembe
 		return nil, "", "", apperrors.ErrInternalServer
 	}
 
-	if storeErr := s.refreshTokenMgr.Store(user.ID, refreshToken, getRefreshTokenTTL()); storeErr != nil {
+	if storeErr := s.refreshTokenMgr.Store(user.ID, refreshToken, getRefreshTokenTTLForRememberMe(rememberMe)); storeErr != nil {
 		zap.L().Error("Failed to store refresh token, aborting login", zap.Error(storeErr))
 		return nil, "", "", apperrors.ErrInternalServer
 	}
@@ -333,7 +341,7 @@ func (s *authService) RefreshToken(refreshToken string) (*repository.User, strin
 	}
 
 	// 原子旋转：validate-old → revoke-old → store-new，单次 Redis 操作
-	if rotateErr := s.refreshTokenMgr.Rotate(claims.UserID, refreshToken, newRefreshToken, getRefreshTokenTTL()); rotateErr != nil {
+	if rotateErr := s.refreshTokenMgr.Rotate(claims.UserID, refreshToken, newRefreshToken, getRefreshTokenTTLForRememberMe(rememberMe)); rotateErr != nil {
 		zap.L().Error("Failed to rotate refresh token atomically",
 			zap.Uint("user_id", claims.UserID),
 			zap.Error(rotateErr),
@@ -374,6 +382,14 @@ func (s *authService) Logout(userID uint, refreshToken, accessToken string) erro
 	s.auditLogger.Log(&dto.AuditContext{UserID: userID}, "logout", "user", map[string]interface{}{
 		"method": "manual",
 	})
+
+	// Notify other systems via Redis Pub/Sub
+	if s.redis != nil {
+		msg, _ := json.Marshal(map[string]interface{}{"user_id": userID})
+		if err := s.redis.Publish(context.Background(), "sso:user:logout", msg).Err(); err != nil {
+			zap.L().Warn("Failed to publish logout event", zap.Uint("user_id", userID), zap.Error(err))
+		}
+	}
 
 	return nil
 }

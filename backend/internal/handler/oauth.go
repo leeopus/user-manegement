@@ -17,6 +17,7 @@ type OAuthHandler interface {
 	AuthorizePage(c *gin.Context)
 	Token(c *gin.Context)
 	Userinfo(c *gin.Context)
+	FrontchannelLogoutURIs(c *gin.Context)
 	ListApplications(c *gin.Context)
 	GetApplication(c *gin.Context)
 	CreateApplication(c *gin.Context)
@@ -192,6 +193,11 @@ func (h *oauthHandler) Userinfo(c *gin.Context) {
 	}
 
 	response.Success(c, dto.ToUserResponse(user))
+}
+
+func (h *oauthHandler) FrontchannelLogoutURIs(c *gin.Context) {
+	uris := h.oauthService.ListFrontchannelLogoutURIs()
+	response.Success(c, gin.H{"logout_uris": uris})
 }
 
 func (h *oauthHandler) ListApplications(c *gin.Context) {

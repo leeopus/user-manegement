@@ -49,14 +49,15 @@ type CORSConfig struct {
 
 // SecurityConfig 集中管理所有安全相关参数
 type SecurityConfig struct {
-	CookieSecure         bool `mapstructure:"cookie_secure"`
-	MaxFailedAttempts    int  `mapstructure:"max_failed_attempts"`
-	LockoutDurationMin   int  `mapstructure:"lockout_duration_min"`
-	MaxTotalAttempts     int  `mapstructure:"max_total_attempts"`
-	MaxSessionsPerUser   int  `mapstructure:"max_sessions_per_user"`
-	AccessTokenMaxTTLMin int  `mapstructure:"access_token_max_ttl_min"`
-	RefreshTokenTTLDays  int  `mapstructure:"refresh_token_ttl_days"`
-	CSRFTokenTTLMin      int  `mapstructure:"csrf_token_ttl_min"`
+	CookieSecure                 bool `mapstructure:"cookie_secure"`
+	MaxFailedAttempts            int  `mapstructure:"max_failed_attempts"`
+	LockoutDurationMin           int  `mapstructure:"lockout_duration_min"`
+	MaxTotalAttempts             int  `mapstructure:"max_total_attempts"`
+	MaxSessionsPerUser           int  `mapstructure:"max_sessions_per_user"`
+	AccessTokenMaxTTLMin         int  `mapstructure:"access_token_max_ttl_min"`
+	RefreshTokenTTLDays          int  `mapstructure:"refresh_token_ttl_days"`
+	RefreshTokenTTLDaysNoRemember int `mapstructure:"refresh_token_ttl_days_no_remember"`
+	CSRFTokenTTLMin              int  `mapstructure:"csrf_token_ttl_min"`
 	AuditRetentionDays     int    `mapstructure:"audit_retention_days"`
 	PasswordResetSecret    string `mapstructure:"password_reset_secret"`
 }
@@ -79,8 +80,9 @@ var flatToNested = map[string]string{
 	"MAX_TOTAL_ATTEMPTS":        "security.max_total_attempts",
 	"MAX_SESSIONS_PER_USER":     "security.max_sessions_per_user",
 	"ACCESS_TOKEN_MAX_TTL_MIN":  "security.access_token_max_ttl_min",
-	"REFRESH_TOKEN_TTL_DAYS":    "security.refresh_token_ttl_days",
-	"CSRF_TOKEN_TTL_MIN":        "security.csrf_token_ttl_min",
+	"REFRESH_TOKEN_TTL_DAYS":             "security.refresh_token_ttl_days",
+	"REFRESH_TOKEN_TTL_DAYS_NO_REMEMBER": "security.refresh_token_ttl_days_no_remember",
+	"CSRF_TOKEN_TTL_MIN":                 "security.csrf_token_ttl_min",
 	"AUDIT_RETENTION_DAYS":      "security.audit_retention_days",
 	"PASSWORD_RESET_SECRET":     "security.password_reset_secret",
 }
@@ -104,6 +106,7 @@ func Load(configPath string) error {
 	viper.SetDefault("security.max_sessions_per_user", 5)
 	viper.SetDefault("security.access_token_max_ttl_min", 15)
 	viper.SetDefault("security.refresh_token_ttl_days", 30)
+	viper.SetDefault("security.refresh_token_ttl_days_no_remember", 7)
 	viper.SetDefault("security.csrf_token_ttl_min", 30)
 	viper.SetDefault("security.audit_retention_days", 90)
 
@@ -134,6 +137,7 @@ func Load(configPath string) error {
 	viper.BindEnv("security.max_sessions_per_user", "MAX_SESSIONS_PER_USER")
 	viper.BindEnv("security.access_token_max_ttl_min", "ACCESS_TOKEN_MAX_TTL_MIN")
 	viper.BindEnv("security.refresh_token_ttl_days", "REFRESH_TOKEN_TTL_DAYS")
+	viper.BindEnv("security.refresh_token_ttl_days_no_remember", "REFRESH_TOKEN_TTL_DAYS_NO_REMEMBER")
 	viper.BindEnv("security.csrf_token_ttl_min", "CSRF_TOKEN_TTL_MIN")
 	viper.BindEnv("security.audit_retention_days", "AUDIT_RETENTION_DAYS")
 	viper.BindEnv("security.password_reset_secret", "PASSWORD_RESET_SECRET")
@@ -174,6 +178,12 @@ func Load(configPath string) error {
 	if sec.RefreshTokenTTLDays < 1 || sec.RefreshTokenTTLDays > 90 {
 		return fmt.Errorf("REFRESH_TOKEN_TTL_DAYS must be between 1 and 90, got %d", sec.RefreshTokenTTLDays)
 	}
+	if sec.RefreshTokenTTLDaysNoRemember < 1 || sec.RefreshTokenTTLDaysNoRemember > 90 {
+		return fmt.Errorf("REFRESH_TOKEN_TTL_DAYS_NO_REMEMBER must be between 1 and 90, got %d", sec.RefreshTokenTTLDaysNoRemember)
+	}
+	if sec.RefreshTokenTTLDaysNoRemember > sec.RefreshTokenTTLDays {
+		return fmt.Errorf("REFRESH_TOKEN_TTL_DAYS_NO_REMEMBER (%d) must not exceed REFRESH_TOKEN_TTL_DAYS (%d)", sec.RefreshTokenTTLDaysNoRemember, sec.RefreshTokenTTLDays)
+	}
 
 	// 密码重置密钥：未设置时回退到 JWT Secret 并告警，release 模式强制要求独立设置
 	if sec.PasswordResetSecret == "" {
@@ -198,6 +208,18 @@ func (c *Config) GetRefreshTokenTTL() time.Duration {
 	days := c.Security.RefreshTokenTTLDays
 	if days <= 0 {
 		days = 30
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// GetRefreshTokenTTLForRememberMe 根据 RememberMe 返回 refresh token 有效期
+func (c *Config) GetRefreshTokenTTLForRememberMe(rememberMe bool) time.Duration {
+	if rememberMe {
+		return c.GetRefreshTokenTTL()
+	}
+	days := c.Security.RefreshTokenTTLDaysNoRemember
+	if days <= 0 {
+		days = 7
 	}
 	return time.Duration(days) * 24 * time.Hour
 }

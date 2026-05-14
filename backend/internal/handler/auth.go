@@ -88,10 +88,15 @@ func (h *authHandler) Login(c *gin.Context) {
 
 	cfg := config.Get()
 	accessTTL := time.Duration(cfg.Security.AccessTokenMaxTTLMin) * time.Minute
-	refreshTTL := cfg.GetRefreshTokenTTL()
 
 	jwt.SetTokenCookie(c, jwt.AccessTokenCookie, accessToken, accessTTL)
-	jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
+
+	if req.RememberMe {
+		refreshTTL := cfg.GetRefreshTokenTTL()
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, refreshToken, refreshTTL)
+	} else {
+		jwt.SetSessionTokenCookie(c, jwt.RefreshTokenCookie, refreshToken)
+	}
 
 	response.Success(c, gin.H{
 		"user": dto.ToUserWithRolesResponse(user),
@@ -136,7 +141,7 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	user, newAccessToken, newRefreshToken, _, err := h.authService.RefreshToken(refreshToken)
+	user, newAccessToken, newRefreshToken, rememberMe, err := h.authService.RefreshToken(refreshToken)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -145,10 +150,15 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 	// Access Token Cookie 始终对齐 JWT TTL；RememberMe 仅影响 Refresh Token
 	cfg := config.Get()
 	accessTTL := time.Duration(cfg.Security.AccessTokenMaxTTLMin) * time.Minute
-	refreshTTL := cfg.GetRefreshTokenTTL()
 
 	jwt.SetTokenCookie(c, jwt.AccessTokenCookie, newAccessToken, accessTTL)
-	jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
+
+	if rememberMe {
+		refreshTTL := cfg.GetRefreshTokenTTL()
+		jwt.SetTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken, refreshTTL)
+	} else {
+		jwt.SetSessionTokenCookie(c, jwt.RefreshTokenCookie, newRefreshToken)
+	}
 
 	response.Success(c, gin.H{
 		"user": dto.ToUserResponse(user),

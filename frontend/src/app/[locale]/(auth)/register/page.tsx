@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "@/i18n/routing"
+import { useSearchParams } from "next/navigation"
 import { useTranslations } from 'next-intl'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +17,7 @@ import {
 } from "@/lib/validation"
 import { Link } from "@/i18n/routing"
 import { Mail, Lock, Eye, EyeOff, Check } from "lucide-react"
+import { OpusBrandLogo } from "@/components/opus-logo"
 
 interface ValidationErrors {
   email?: string
@@ -27,6 +29,8 @@ export default function RegisterPage() {
   const tc = useTranslations('common')
   const tv = useTranslations('validation')
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const redirect = useMemo(() => searchParams.get('redirect') || '', [searchParams])
   const { getError } = useErrorHandler()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -108,7 +112,10 @@ export default function RegisterPage() {
 
     try {
       await api.register({ email, password })
-      router.push("/login?registered=true")
+      const loginUrl = redirect
+        ? `/login?registered=true&redirect=${encodeURIComponent(redirect)}`
+        : "/login?registered=true"
+      router.push(loginUrl)
     } catch (err) {
       setError(getError(err))
     } finally {
@@ -123,8 +130,10 @@ export default function RegisterPage() {
       <div className="w-full max-w-md">
         {/* Logo and Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{tc('appName')}</h1>
-          <h2 className="mt-6 text-2xl font-semibold text-gray-900">
+          <div className="flex items-center justify-center mb-4">
+            <OpusBrandLogo size="lg" system="account" />
+          </div>
+          <h2 className="text-xl font-semibold text-gray-900">
             {t('createAccount')}
           </h2>
           <p className="mt-2 text-sm text-gray-600">
@@ -244,7 +253,7 @@ export default function RegisterPage() {
             <div className="text-center text-sm">
               <span className="text-gray-600">{t('hasAccount')}</span>{" "}
               <Link
-                href="/login"
+                href={redirect ? `/login?redirect=${encodeURIComponent(redirect)}` : "/login"}
                 className="font-medium text-blue-600 hover:text-blue-700"
               >
                 {t('loginNow')}

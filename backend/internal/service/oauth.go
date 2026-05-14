@@ -31,6 +31,7 @@ type OAuthService interface {
 	UpdateApplication(id uint, name, redirectURIs string, auditCtx dto.AuditContext) (*repository.OAuthApplication, error)
 	DeleteApplication(id uint, auditCtx dto.AuditContext) error
 	ListApplications(offset, pageSize int) ([]repository.OAuthApplication, int64, error)
+	ListFrontchannelLogoutURIs() []string
 	Authorize(userID uint, clientID, redirectURI, state, scope, codeChallenge, codeChallengeMethod, ipAddress, userAgent string) (string, error)
 	Token(clientID, clientSecret, code, redirectURI, codeVerifier string) (string, string, error)
 	UserinfoByID(userID uint) (*repository.User, error)
@@ -284,7 +285,7 @@ func (s *oauthService) Token(clientID, clientSecret, code, redirectURI, codeVeri
 		ApplicationID: app.ID,
 		UserID:        user.ID,
 		AccessToken:   repository.HashOAuthToken(accessToken),
-		ExpiresAt:     time.Now().Add(time.Hour),
+		ExpiresAt:     time.Now().Add(10 * time.Minute),
 	}
 	if err := s.tokenRepo.Create(oauthToken); err != nil {
 		zap.L().Error("Failed to store OAuth token", zap.Error(err))
@@ -359,6 +360,10 @@ func (s *oauthService) DeleteApplication(id uint, auditCtx dto.AuditContext) err
 
 func (s *oauthService) ListApplications(offset, pageSize int) ([]repository.OAuthApplication, int64, error) {
 	return s.appRepo.List(offset, pageSize)
+}
+
+func (s *oauthService) ListFrontchannelLogoutURIs() []string {
+	return s.appRepo.ListFrontchannelLogoutURIs()
 }
 
 func isValidRedirectURI(registeredURIs, requestedURI string) bool {
@@ -470,6 +475,9 @@ func validateRedirectURIIsPublic(rawURI string) error {
 
 // checkIPNotInternal 检查 IP 是否为内部/私有地址
 func checkIPNotInternal(originalIP net.IP, host string) error {
+	if os.Getenv("GIN_MODE") != "release" {
+		return nil
+	}
 	ip := originalIP.To4()
 	if ip == nil {
 		ip = originalIP.To16()

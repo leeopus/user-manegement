@@ -18,7 +18,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-const PUBLIC_PATHS = ['/login', '/register', '/forgot-password', '/reset-password']
+const PUBLIC_PATHS = ['/login', '/register', '/forgot-password', '/reset-password', '/logout']
 
 // Retry config for transient network errors
 const INIT_RETRY_COUNT = 2
@@ -100,6 +100,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // 即使 logout API 失败也要清除本地状态
     }
     setUser(null)
+
+    // Front-channel logout: notify OAuth clients to clear their sessions
+    try {
+      const res = await fetch('/api/v1/oauth/frontchannel-logout-uris')
+      const data = await res.json()
+      const uris: string[] = data?.data?.logout_uris ?? []
+      if (uris.length > 0) {
+        await Promise.all(
+          uris.map(
+            (uri) =>
+              new Promise<void>((resolve) => {
+                const timer = setTimeout(() => {
+                  iframe.remove()
+                  resolve()
+                }, 3000)
+                const iframe = document.createElement('iframe')
+                iframe.style.display = 'none'
+                iframe.src = uri
+                iframe.onload = () => {
+                  clearTimeout(timer)
+                  iframe.remove()
+                  resolve()
+                }
+                iframe.onerror = () => {
+                  clearTimeout(timer)
+                  iframe.remove()
+                  resolve()
+                }
+                document.body.appendChild(iframe)
+              })
+          )
+        )
+      }
+    } catch {
+      // front-channel logout 失败不应阻断流程
+    }
+
     router.push('/login')
   }, [router])
 

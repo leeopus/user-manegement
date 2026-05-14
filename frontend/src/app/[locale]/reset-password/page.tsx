@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PasswordStrength } from "@/components/ui/password-strength"
+import { OpusBrandLogo } from "@/components/opus-logo"
 import { api } from "@/lib/api"
 import { useErrorHandler } from "@/lib/use-error-handler"
 import { validatePassword, PasswordStrength as StrengthLevel } from "@/lib/validation"
@@ -140,7 +141,7 @@ export default function ResetPasswordPage() {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 px-4 py-12 sm:px-6 lg:px-8">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">{tc('appName')}</h1>
+            <OpusBrandLogo size="lg" system="account" />
           </div>
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-8 py-8 text-center">
             <XCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
@@ -169,7 +170,7 @@ export default function ResetPasswordPage() {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 px-4 py-12 sm:px-6 lg:px-8">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">{tc('appName')}</h1>
+            <OpusBrandLogo size="lg" system="account" />
           </div>
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-8 py-8 text-center">
             <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
@@ -196,7 +197,7 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-md">
         {/* Logo and Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{tc('appName')}</h1>
+          <OpusBrandLogo size="lg" system="account" />
           <h2 className="mt-6 text-2xl font-semibold text-gray-900">
             {t('resetPassword')}
           </h2>
