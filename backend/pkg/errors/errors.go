@@ -362,6 +362,63 @@ var (
 		"USER_INVALID_STATUS",
 		http.StatusBadRequest,
 	)
+
+	// Nickname errors
+	ErrNicknameAlreadyExists = New(
+		"NICKNAME_ALREADY_EXISTS_409",
+		"NICKNAME_ALREADY_EXISTS",
+		http.StatusConflict,
+	)
+
+	ErrNicknameInvalid = New(
+		"NICKNAME_INVALID_400",
+		"NICKNAME_INVALID",
+		http.StatusBadRequest,
+	)
+
+	ErrNicknameCooldown = New(
+		"NICKNAME_COOLDOWN_429",
+		"NICKNAME_COOLDOWN",
+		http.StatusTooManyRequests,
+	)
+
+	// File upload errors
+	ErrFileTooLarge = New(
+		"FILE_TOO_LARGE_400",
+		"FILE_TOO_LARGE",
+		http.StatusBadRequest,
+	)
+
+	ErrFileInvalid = New(
+		"FILE_INVALID_400",
+		"FILE_INVALID",
+		http.StatusBadRequest,
+	)
+
+	ErrFileInvalidType = New(
+		"FILE_INVALID_TYPE_400",
+		"FILE_INVALID_TYPE",
+		http.StatusBadRequest,
+	)
+
+	// Email verification errors
+	ErrEmailVerificationInvalid = New(
+		"EMAIL_VERIFICATION_INVALID_400",
+		"EMAIL_VERIFICATION_INVALID",
+		http.StatusBadRequest,
+	)
+
+	ErrEmailAlreadyVerified = New(
+		"EMAIL_ALREADY_VERIFIED_400",
+		"EMAIL_ALREADY_VERIFIED",
+		http.StatusBadRequest,
+	)
+
+	ErrEmailVerifyCooldown = New(
+		"EMAIL_VERIFY_COOLDOWN_429",
+		"EMAIL_VERIFY_COOLDOWN",
+		http.StatusTooManyRequests,
+	)
 )
 
 // IsAppError 判断是否为应用错误

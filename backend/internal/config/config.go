@@ -20,6 +20,7 @@ type Config struct {
 	CORS     CORSConfig     `mapstructure:"cors"`
 	Frontend FrontendConfig `mapstructure:"frontend"`
 	Security SecurityConfig `mapstructure:"security"`
+	Upload   UploadConfig   `mapstructure:"upload"`
 }
 
 type ServerConfig struct {
@@ -29,6 +30,12 @@ type ServerConfig struct {
 
 type FrontendConfig struct {
 	URL string `mapstructure:"url"`
+}
+
+type UploadConfig struct {
+	AvatarDir    string `mapstructure:"avatar_dir"`
+	MaxFileSize  int64  `mapstructure:"max_file_size"`
+	AllowedTypes string `mapstructure:"allowed_types"`
 }
 
 type DatabaseConfig struct {
@@ -83,8 +90,11 @@ var flatToNested = map[string]string{
 	"REFRESH_TOKEN_TTL_DAYS":             "security.refresh_token_ttl_days",
 	"REFRESH_TOKEN_TTL_DAYS_NO_REMEMBER": "security.refresh_token_ttl_days_no_remember",
 	"CSRF_TOKEN_TTL_MIN":                 "security.csrf_token_ttl_min",
-	"AUDIT_RETENTION_DAYS":      "security.audit_retention_days",
-	"PASSWORD_RESET_SECRET":     "security.password_reset_secret",
+	"AUDIT_RETENTION_DAYS":          "security.audit_retention_days",
+	"PASSWORD_RESET_SECRET":         "security.password_reset_secret",
+	"UPLOAD_AVATAR_DIR":         "upload.avatar_dir",
+	"UPLOAD_MAX_FILE_SIZE":      "upload.max_file_size",
+	"UPLOAD_ALLOWED_TYPES":      "upload.allowed_types",
 }
 
 func Load(configPath string) error {
@@ -109,6 +119,9 @@ func Load(configPath string) error {
 	viper.SetDefault("security.refresh_token_ttl_days_no_remember", 7)
 	viper.SetDefault("security.csrf_token_ttl_min", 30)
 	viper.SetDefault("security.audit_retention_days", 90)
+	viper.SetDefault("upload.avatar_dir", "./uploads/avatars")
+	viper.SetDefault("upload.max_file_size", int64(2097152))
+	viper.SetDefault("upload.allowed_types", "image/jpeg,image/png,image/gif,image/webp")
 
 	// Read from config file (.env)
 	if err := viper.ReadInConfig(); err != nil {
@@ -141,6 +154,9 @@ func Load(configPath string) error {
 	viper.BindEnv("security.csrf_token_ttl_min", "CSRF_TOKEN_TTL_MIN")
 	viper.BindEnv("security.audit_retention_days", "AUDIT_RETENTION_DAYS")
 	viper.BindEnv("security.password_reset_secret", "PASSWORD_RESET_SECRET")
+	viper.BindEnv("upload.avatar_dir", "UPLOAD_AVATAR_DIR")
+	viper.BindEnv("upload.max_file_size", "UPLOAD_MAX_FILE_SIZE")
+	viper.BindEnv("upload.allowed_types", "UPLOAD_ALLOWED_TYPES")
 	viper.AutomaticEnv()
 
 	AppConfig = &Config{}

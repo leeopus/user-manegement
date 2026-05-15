@@ -1,4 +1,3 @@
-export type Messages = typeof import('./zh.json');
 export type Locale = 'zh' | 'en';
 
 export const locales: Locale[] = ['zh', 'en'];

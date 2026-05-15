@@ -39,6 +39,7 @@ type passwordResetService struct {
 	blacklistMgr        *auth.TokenBlacklistManager
 	redisClient         *redis.Client
 	emailCooldown       time.Duration
+	eventPublisher      *UserEventPublisher
 }
 
 func NewPasswordResetService(
@@ -52,6 +53,7 @@ func NewPasswordResetService(
 	blacklistMgr *auth.TokenBlacklistManager,
 	redisClient *redis.Client,
 	emailCooldown time.Duration,
+	eventPublisher *UserEventPublisher,
 ) PasswordResetService {
 	return &passwordResetService{
 		userRepo:            userRepo,
@@ -65,6 +67,7 @@ func NewPasswordResetService(
 		blacklistMgr:        blacklistMgr,
 		redisClient:         redisClient,
 		emailCooldown:       emailCooldown,
+		eventPublisher:      eventPublisher,
 	}
 }
 
@@ -272,6 +275,7 @@ func (s *passwordResetService) ResetPassword(token, newPassword string) error {
 	s.auditLogger.LogSync(&dto.AuditContext{UserID: targetUserID}, "password_reset_completed", "user", map[string]interface{}{
 		"email": targetEmail,
 	})
+	s.eventPublisher.Publish(context.Background(), EventPasswordChanged, targetUserID, UserEventData{})
 
 	return nil
 }

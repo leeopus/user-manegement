@@ -61,8 +61,11 @@ export interface User {
   id: number
   email: string
   username: string
+  nickname?: string
+  bio?: string
   avatar?: string
   status?: string
+  email_verified_at?: string
   roles?: Role[]
   created_at?: string
   updated_at?: string
@@ -89,6 +92,12 @@ export interface CreateUserRequest {
 export interface UpdateUserRequest {
   username: string
   email: string
+}
+
+export interface UpdateProfileRequest {
+  nickname?: string
+  bio?: string
+  avatar?: string
 }
 
 export interface CreateRoleRequest {

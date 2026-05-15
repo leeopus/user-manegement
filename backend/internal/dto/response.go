@@ -7,6 +7,8 @@ type UserResponse struct {
 	ID                uint       `json:"id"`
 	Username          string     `json:"username"`
 	Email             string     `json:"email"`
+	Nickname          string     `json:"nickname,omitempty"`
+	Bio               string     `json:"bio,omitempty"`
 	Avatar            string     `json:"avatar,omitempty"`
 	Status            string     `json:"status"`
 	EmailVerifiedAt   *time.Time `json:"email_verified_at,omitempty"`

@@ -143,6 +143,7 @@ func (s *authService) Register(email, password string, auditCtx dto.AuditContext
 				PasswordHash:      passwordHash,
 				Status:            "active",
 				PasswordChangedAt: &now,
+				Nickname:          generateNickname(tx, s.userRepo),
 			}
 
 			tx.SavePoint(spName)
@@ -435,6 +436,23 @@ func isUsernameConstraint(err error) bool {
 		return pgErr.ConstraintName == ConstraintUsersUsernameKey
 	}
 	return false
+}
+
+// generateNickname generates a globally unique nickname within the transaction
+func generateNickname(tx *gorm.DB, userRepo repository.UserRepository) string {
+	for i := 0; i < 5; i++ {
+		nickname, err := utils.GenerateUniqueNickname()
+		if err != nil {
+			continue
+		}
+		existing, _ := userRepo.FindByNicknameWithTx(tx, nickname)
+		if existing == nil {
+			return nickname
+		}
+	}
+	// Fallback with timestamp suffix
+	suffix, _ := utils.RandomSuffix(6)
+	return "User_" + suffix
 }
 
 func extractPlatform(userAgent string) string {

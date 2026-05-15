@@ -20,6 +20,7 @@ import {
   UpdatePermissionRequest,
   CreateOAuthAppRequest,
   UpdateOAuthAppRequest,
+  UpdateProfileRequest,
 } from './types'
 import { APIException } from './errors'
 import { addCSRFToHeaders } from './csrf'
@@ -621,6 +622,104 @@ class APIClient {
     }
     return response.data
   }
+
+  // Profile
+  async getProfile(): Promise<User> {
+    const response = await this.request<User>('/api/v1/profile', {})
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async updateProfile(data: UpdateProfileRequest): Promise<User> {
+    const response = await this.request<User>('/api/v1/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async uploadAvatar(file: File): Promise<{ avatar: string }> {
+    const formData = new FormData()
+    formData.append('avatar', file)
+
+    const url = this.getUrl('/api/v1/profile/avatar')
+
+    let headers: Record<string, string> = {}
+    try {
+      headers = (await addCSRFToHeaders(headers)) as Record<string, string>
+    } catch {
+      throw new Error('CSRF_TOKEN_UNAVAILABLE: Failed to obtain CSRF token.')
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: formData,
+        signal: controller.signal,
+      })
+
+      const contentType = response.headers.get('content-type') || ''
+      if (!contentType.includes('application/json')) {
+        throw new Error('NETWORK_ERROR: Server returned an unexpected response.')
+      }
+
+      const data: APIResponse<{ avatar: string }> = await response.json()
+      if (!data.success || !data.data) {
+        throw APIException.fromAPIError(data.error!)
+      }
+      return data.data
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('REQUEST_TIMEOUT: Request timed out.')
+      }
+      throw error
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  // Email verification
+  async verifyEmail(token: string): Promise<User> {
+    const response = await this.request<User>('/api/v1/auth/email/verify', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    })
+    if (!response.success || !response.data) {
+      throw APIException.fromAPIError(response.error!)
+    }
+    return response.data
+  }
+
+  async resendEmailVerification(): Promise<void> {
+    const response = await this.request<void>('/api/v1/profile/email/resend', {
+      method: 'POST',
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
+  // Account deactivation
+  async deactivateAccount(password: string): Promise<void> {
+    const response = await this.request<void>('/api/v1/profile/account', {
+      method: 'DELETE',
+      body: JSON.stringify({ password, confirm: true }),
+    })
+    if (!response.success) {
+      throw APIException.fromAPIError(response.error!)
+    }
+  }
+
 }
 
 export const api = new APIClient()

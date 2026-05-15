@@ -74,7 +74,6 @@ func (s *smtpEmailService) SendPasswordResetEmail(email, resetLink string) error
 
 func (s *smtpEmailService) SendPasswordChangedNotification(email string) error {
 	if s.config == nil || s.config.Host == "" {
-		// 如果没有配置SMTP，回退到开发环境
 		fmt.Println("警告：SMTP未配置，使用开发环境邮件服务")
 		return (&developmentEmailService{}).SendPasswordChangedNotification(email)
 	}
@@ -88,6 +87,29 @@ func (s *smtpEmailService) SendPasswordChangedNotification(email string) error {
 
 祝好，
 用户管理系统团队`
+
+	return s.sendEmail(email, subject, body)
+}
+
+func (s *smtpEmailService) SendEmailVerificationEmail(email, verificationLink string) error {
+	if s.config == nil || s.config.Host == "" {
+		fmt.Println("警告：SMTP未配置，使用开发环境邮件服务")
+		return (&developmentEmailService{}).SendEmailVerificationEmail(email, verificationLink)
+	}
+
+	subject := "邮箱验证"
+	body := fmt.Sprintf(`尊敬的用户：
+
+请点击以下链接验证您的邮箱地址：
+
+%s
+
+此链接将在 24 小时后过期。
+
+如果这不是您的操作，请忽略此邮件。
+
+祝好，
+用户管理系统团队`, verificationLink)
 
 	return s.sendEmail(email, subject, body)
 }

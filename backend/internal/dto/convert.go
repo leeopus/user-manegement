@@ -13,6 +13,8 @@ func ToUserResponse(user *repository.User) UserResponse {
 		ID:                user.ID,
 		Username:          user.Username,
 		Email:             user.Email,
+		Nickname:          user.Nickname,
+		Bio:               user.Bio,
 		Avatar:            user.Avatar,
 		Status:            user.Status,
 		EmailVerifiedAt:   user.EmailVerifiedAt,

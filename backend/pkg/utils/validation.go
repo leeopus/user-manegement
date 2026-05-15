@@ -410,7 +410,37 @@ func isAlpha(c rune) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// SanitizeHTML 对字符串进行 HTML 实体转义，防止 XSS
+// GenerateUniqueNickname 生成唯一昵称: User_ + 6位随机小写字母+数字
+func GenerateUniqueNickname() (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	const length = 6
+	result := make([]byte, length)
+	for i := range result {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", fmt.Errorf("crypto/rand failed: %w", err)
+		}
+		result[i] = charset[n.Int64()]
+	}
+	return "User_" + string(result), nil
+}
+
+// ValidateNickname 验证昵称格式
+func ValidateNickname(nickname string) error {
+	nickname = strings.TrimSpace(nickname)
+	if len(nickname) < 2 {
+		return errors.New("validation.nickname.minLength")
+	}
+	if len(nickname) > 50 {
+		return errors.New("validation.nickname.maxLength")
+	}
+	for _, c := range nickname {
+		if c < 32 {
+			return errors.New("validation.nickname.invalidChars")
+		}
+	}
+	return nil
+}
 func SanitizeHTML(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 16)

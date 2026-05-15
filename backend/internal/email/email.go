@@ -8,6 +8,7 @@ import (
 type EmailService interface {
 	SendPasswordResetEmail(email, resetLink string) error
 	SendPasswordChangedNotification(email string) error
+	SendEmailVerificationEmail(email, verificationLink string) error
 }
 
 // developmentEmailService 开发环境邮件服务（控制台输出）
@@ -37,6 +38,18 @@ func (s *developmentEmailService) SendPasswordChangedNotification(email string) 
 	log.Printf("收件人: %s", email)
 	log.Println("您的密码已成功更改")
 	log.Println("如果这不是您的操作，请立即联系支持")
+	log.Println("=====================================")
+	return nil
+}
+
+func (s *developmentEmailService) SendEmailVerificationEmail(email, verificationLink string) error {
+	log.Println("=====================================")
+	log.Println("📧 邮箱验证邮件（开发环境）")
+	log.Println("=====================================")
+	log.Printf("收件人: %s", email)
+	log.Printf("验证链接: %s", verificationLink)
+	log.Println("此链接将在 24 小时后过期")
+	log.Println("如果这不是您的操作，请忽略此邮件")
 	log.Println("=====================================")
 	return nil
 }

@@ -1,0 +1,8 @@
+{
+  "title": "邮箱验证",
+  "verifying": "正在验证您的邮箱...",
+  "success": "邮箱验证成功！",
+  "verificationFailed": "验证失败，链接可能已过期。",
+  "missingToken": "无效的验证链接。",
+  "goToProfile": "返回个人中心"
+}

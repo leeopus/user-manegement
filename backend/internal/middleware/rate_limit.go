@@ -295,6 +295,45 @@ func PasswordChangeRateLimit(redisClient *redis.Client) gin.HandlerFunc {
 	}
 }
 
+// ProfileUpdateRateLimit 个人资料更新端点专用限流（IP + 用户双维度，fail-closed）
+func ProfileUpdateRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewFailClosedRateLimiter(redisClient)
+	ipLimit := rl.RateLimit(RateLimitConfig{
+		MaxRequests:   10,
+		Window:        15 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	})
+	userLimit := rl.RateLimitWithKey(RateLimitConfig{
+		MaxRequests:   5,
+		Window:        15 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	}, func(c *gin.Context) string {
+		userID, exists := c.Get("user_id")
+		if !exists {
+			return ""
+		}
+		return fmt.Sprintf("user:%v", userID)
+	})
+
+	return func(c *gin.Context) {
+		ipLimit(c)
+		if c.IsAborted() {
+			return
+		}
+		userLimit(c)
+	}
+}
+
+// EmailVerifyRateLimit 邮箱验证端点专用限流（fail-closed）
+func EmailVerifyRateLimit(redisClient *redis.Client) gin.HandlerFunc {
+	rl := NewFailClosedRateLimiter(redisClient)
+	return rl.RateLimit(RateLimitConfig{
+		MaxRequests:   5,
+		Window:        15 * time.Minute,
+		BlockDuration: 1 * time.Hour,
+	})
+}
+
 // GetRemainingAttempts 获取剩余尝试次数
 func (rl *RateLimiter) GetRemainingAttempts(path, clientIP string, maxRequests int, window time.Duration) (int, error) {
 	if rl.redis == nil {

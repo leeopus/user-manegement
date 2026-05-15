@@ -1,0 +1,8 @@
+{
+  "title": "Email Verification",
+  "verifying": "Verifying your email...",
+  "success": "Email verified successfully!",
+  "verificationFailed": "Verification failed. The link may have expired.",
+  "missingToken": "Invalid verification link.",
+  "goToProfile": "Go to Profile"
+}

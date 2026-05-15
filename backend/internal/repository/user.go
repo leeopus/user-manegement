@@ -15,7 +15,12 @@ type User struct {
 	PasswordHash      string     `gorm:"size:255;not null" json:"-"`
 	Avatar            string     `gorm:"size:255" json:"avatar"`
 	Status            string     `gorm:"size:20;default:active" json:"status"`
-	EmailVerifiedAt   *time.Time `json:"email_verified_at"`
+	Nickname          string     `gorm:"size:50;uniqueIndex:idx_users_nickname,where:deleted_at IS NULL" json:"nickname"`
+	NicknameUpdatedAt *time.Time `json:"nickname_updated_at"`
+	Bio               string     `gorm:"size:500" json:"bio"`
+	PendingEmail        string     `gorm:"size:100" json:"pending_email"`
+	DeletionRequestedAt *time.Time `json:"deletion_requested_at"`
+	EmailVerifiedAt     *time.Time `json:"email_verified_at"`
 	PasswordChangedAt *time.Time `gorm:"not null" json:"password_changed_at"`
 	LastLoginAt       *time.Time `json:"last_login_at"`
 	LastLoginIP       string     `gorm:"size:45" json:"last_login_ip"`
@@ -38,6 +43,9 @@ func (u *User) BeforeDelete(tx *gorm.DB) error {
 		usernameVal = usernamePrefix + u.Username[:45-len(usernamePrefix)]
 	}
 	u.Username = usernameVal
+
+	// Anonymize nickname to avoid unique index collision
+	u.Nickname = fmt.Sprintf("deleted_%d", u.ID)
 	return nil
 }
 
@@ -70,6 +78,8 @@ type UserRepository interface {
 	FindByIDWithTx(tx *gorm.DB, id uint) (*User, error)
 	FindByEmailWithTx(tx *gorm.DB, email string) (*User, error)
 	FindByUsernameWithTx(tx *gorm.DB, username string) (*User, error)
+	FindByNickname(nickname string) (*User, error)
+	FindByNicknameWithTx(tx *gorm.DB, nickname string) (*User, error)
 }
 
 type userRepository struct {
@@ -242,7 +252,7 @@ func (r *userRepository) UpdateWithTx(tx *gorm.DB, user *User) error {
 
 // UpdateProfileWithTx 更新用户资料字段，不含 password_hash，防止非密码修改场景意外覆写
 func (r *userRepository) UpdateProfileWithTx(tx *gorm.DB, user *User) error {
-	return tx.Model(user).Select("username", "email", "status", "avatar", "email_verified_at").Updates(user).Error
+	return tx.Model(user).Select("username", "email", "status", "avatar", "email_verified_at", "nickname", "nickname_updated_at", "bio", "pending_email").Updates(user).Error
 }
 
 func (r *userRepository) FindByEmailWithTx(tx *gorm.DB, email string) (*User, error) {
@@ -257,6 +267,24 @@ func (r *userRepository) FindByEmailWithTx(tx *gorm.DB, email string) (*User, er
 func (r *userRepository) FindByUsernameWithTx(tx *gorm.DB, username string) (*User, error) {
 	var user User
 	err := tx.Where("username = ?", username).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByNickname(nickname string) (*User, error) {
+	var user User
+	err := r.db.Where("nickname = ? AND deleted_at IS NULL", nickname).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByNicknameWithTx(tx *gorm.DB, nickname string) (*User, error) {
+	var user User
+	err := tx.Where("nickname = ? AND deleted_at IS NULL", nickname).First(&user).Error
 	if err != nil {
 		return nil, err
 	}

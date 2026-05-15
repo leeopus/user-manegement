@@ -23,6 +23,7 @@ import (
 	"github.com/user-system/backend/pkg/logger"
 	"github.com/user-system/backend/pkg/redis"
 	"go.uber.org/zap"
+	"github.com/user-system/backend/pkg/utils"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -90,6 +91,7 @@ func main() {
 			&repository.AuditLog{},
 			&repository.PasswordResetToken{},
 			&repository.PasswordHistory{},
+				&repository.EmailVerificationToken{},
 		); err != nil {
 			zap.L().Fatal("Failed to migrate database", zap.Error(err))
 		}
@@ -99,6 +101,9 @@ func main() {
 			if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_audit_user_created_at ON audit_logs (user_id, created_at DESC)").Error; err != nil {
 				zap.L().Warn("Failed to create audit_logs composite index", zap.Error(err))
 			}
+
+			// Backfill empty nicknames for existing users
+			backfillNicknames(db)
 	} else {
 		zap.L().Info("AutoMigrate skipped (set AUTO_MIGRATE=true to enable)")
 	}
@@ -116,6 +121,7 @@ func main() {
 	auditLogRepo := asyncAuditRepo // implements repository.AuditLogRepository
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 	passwordHistoryRepo := repository.NewPasswordHistoryRepository(db)
+	emailVerifyTokenRepo := repository.NewEmailVerificationTokenRepository(db)
 
 	smtpConfig := email.GetSMTPConfig()
 	var emailService email.EmailService
@@ -134,6 +140,10 @@ func main() {
 	refreshTokenMgr := auth.NewRefreshTokenManager(redis.Client)
 
 	authService := service.NewAuthService(userRepo, passwordHistoryRepo, auditLogger, redis.Client, blacklistMgr, refreshTokenMgr)
+	eventPublisher := service.NewUserEventPublisher(redis.Client)
+	emailVerifyService := service.NewEmailVerificationService(emailVerifyTokenRepo, userRepo, emailService, redis.Client, cfg.Frontend.URL, eventPublisher)
+	profileService := service.NewProfileService(userRepo, auditLogger, refreshTokenMgr, blacklistMgr, eventPublisher)
+	uploadService := service.NewUploadService(cfg.Upload)
 	userService := service.NewUserService(userRepo, roleRepo, auditLogger, rbacCache, blacklistMgr, refreshTokenMgr)
 	roleService := service.NewRoleService(roleRepo, permissionRepo, auditLogger, rbacCache)
 	permissionService := service.NewPermissionService(permissionRepo, auditLogger, rbacCache)
@@ -143,7 +153,7 @@ func main() {
 	pwResetMaxPerHour := cfg.GetIntEnv("PW_RESET_IP_MAX_PER_HOUR", 3)
 	pwResetBlockHours := time.Duration(cfg.GetIntEnv("PW_RESET_IP_BLOCK_HOURS", 24)) * time.Hour
 
-	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr, redis.Client, pwResetCooldown)
+	passwordService := service.NewPasswordResetService(userRepo, passwordResetTokenRepo, passwordHistoryRepo, auditLogger, emailService, cfg.Frontend.URL, refreshTokenMgr, blacklistMgr, redis.Client, pwResetCooldown, eventPublisher)
 
 	rbacCfg := middleware.RBACConfig{
 		UserRepo:     userRepo,
@@ -157,6 +167,8 @@ func main() {
 	}
 
 	authHandler := handler.NewAuthHandler(authService)
+	emailVerifyHandler := handler.NewEmailVerificationHandler(emailVerifyService)
+	profileHandler := handler.NewProfileHandler(profileService, uploadService)
 	userHandler := handler.NewUserHandler(userService)
 	roleHandler := handler.NewRoleHandler(roleService)
 	permissionHandler := handler.NewPermissionHandler(permissionService)
@@ -197,6 +209,9 @@ func main() {
 	// 健康检查：公开端点仅返回 200/503，不泄露基础设施信息
 	r.GET("/health", healthCheckPublic(sqlDB))
 
+	// Static file serving for uploaded avatars
+	r.Static("/uploads/avatars", "./uploads/avatars")
+
 	r.GET("/api/csrf-token", middleware.CSRFTokenRateLimit(redis.Client), csrfHandler.GetToken)
 
 	v1 := r.Group("/api/v1")
@@ -218,6 +233,9 @@ func main() {
 		v1.POST("/auth/password/reset-request", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client, pwResetMaxPerHour, pwResetBlockHours), passwordHandler.RequestReset)
 		v1.POST("/auth/password/reset", middleware.CSRF(redis.Client), passwordHandler.ResetPassword)
 		v1.POST("/auth/password/validate-token", middleware.CSRF(redis.Client), middleware.PasswordResetRateLimit(redis.Client, pwResetMaxPerHour, pwResetBlockHours), passwordHandler.ValidateToken)
+
+			// Email verification (public endpoint)
+			v1.POST("/auth/email/verify", middleware.CSRF(redis.Client), middleware.EmailVerifyRateLimit(redis.Client), emailVerifyHandler.VerifyEmail)
 
 		users := v1.Group("/users")
 		users.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client), middleware.RequirePermission(rbacCfg, service.PermUserRead))
@@ -278,6 +296,16 @@ func main() {
 		auditLogs.Use(middleware.Auth(authCfg), middleware.RequirePermission(rbacCfg, service.PermAuditRead))
 		{
 			auditLogs.GET("", auditHandler.ListAuditLogs)
+		}
+
+		profileGroup := v1.Group("/profile")
+		profileGroup.Use(middleware.Auth(authCfg), middleware.CSRF(redis.Client))
+		{
+			profileGroup.GET("", profileHandler.GetProfile)
+			profileGroup.PUT("", middleware.ProfileUpdateRateLimit(redis.Client), profileHandler.UpdateProfile)
+			profileGroup.POST("/avatar", middleware.ProfileUpdateRateLimit(redis.Client), profileHandler.UploadAvatar)
+			profileGroup.POST("/email/resend", middleware.EmailVerifyRateLimit(redis.Client), emailVerifyHandler.ResendVerification)
+			profileGroup.DELETE("/account", middleware.ProfileUpdateRateLimit(redis.Client), profileHandler.DeleteAccount)
 		}
 	}
 
@@ -402,5 +430,42 @@ func healthCheckDetail(sqlDB *sql.DB) gin.HandlerFunc {
 			httpStatus = 503
 		}
 		c.JSON(httpStatus, status)
+	}
+}
+
+// backfillNicknames generates unique nicknames for users who have empty ones.
+// Safe to run multiple times (idempotent).
+func backfillNicknames(db *gorm.DB) {
+	type user struct {
+		ID uint
+	}
+	var users []user
+	if err := db.Model(&repository.User{}).
+		Where("(nickname = '' OR nickname IS NULL) AND deleted_at IS NULL").
+		FindInBatches(&users, 100, func(tx *gorm.DB, batch int) error {
+			for _, u := range users {
+				nickname, err := utils.GenerateUniqueNickname()
+				if err != nil {
+					zap.L().Error("backfill: generate nickname failed", zap.Uint("user_id", u.ID), zap.Error(err))
+					continue
+				}
+				// Check uniqueness within batch and DB
+				var count int64
+				tx.Model(&repository.User{}).Where("nickname = ? AND deleted_at IS NULL", nickname).Count(&count)
+				if count > 0 {
+					// Collision, try again with timestamp suffix
+					nickname = nickname + "_" + fmt.Sprintf("%d", time.Now().UnixNano()%10000)
+				}
+				if err := tx.Model(&repository.User{}).Where("id = ?", u.ID).Update("nickname", nickname).Error; err != nil {
+					zap.L().Error("backfill: update nickname failed", zap.Uint("user_id", u.ID), zap.Error(err))
+				}
+			}
+			return nil
+		}).Error; err != nil {
+		zap.L().Error("backfill nicknames failed", zap.Error(err))
+		return
+	}
+	if len(users) > 0 {
+		zap.L().Info("Backfilled nicknames", zap.Int("count", len(users)))
 	}
 }
